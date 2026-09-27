@@ -209,6 +209,7 @@ var catalog_default = {
   name: "just-type-dict",
   version: "1.0.0",
   label: "\u5B8C\u6574\u8BCD\u5E93\uFF08\u96FE\u51C7\u62FC\u97F3 \u5B57\u8868\uFF0B\u57FA\u7840\uFF0B\u6269\u5145\uFF0B\u817E\u8BAF\uFF09",
+  entries: 1872111,
   source: "iDvel/rime-ice@9e66b0729083b37d217312294f6d516c8d7234be",
   license: "GPL-3.0",
   compiler: "librime 1.17.0_2",
@@ -1207,6 +1208,44 @@ function mb(bytes) {
 function approxSize(catalog) {
   return `\u7EA6 ${Math.round(catalog.tarball.bytes / 1e6)} MB`;
 }
+function dictLine(status, ctx) {
+  if (!status) return { text: "\u8FD9\u53F0\u8BBE\u5907\u65E0\u6CD5\u4FDD\u5B58\u5B8C\u6574\u8BCD\u5E93\uFF0C\u57FA\u7840\u8BCD\u5E93\u7167\u5E38\u53EF\u7528", warn: false };
+  const catalog = status.catalog;
+  const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
+  const entries = catalog.entries ? `\u7EA6 ${Math.round(catalog.entries / 1e4)} \u4E07\u8BCD\u6761` : approxSize(catalog);
+  if (ctx.switching === "full") return { text: "\u6B63\u5728\u542F\u7528\u5B8C\u6574\u8BCD\u5E93\u2026", warn: false };
+  if (ctx.switching === "base") return { text: "\u6B63\u5728\u5207\u56DE\u57FA\u7840\u8BCD\u5E93\u2026", warn: false };
+  if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
+    return { text: "\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D", warn: false };
+  }
+  switch (status.phase) {
+    case "active":
+    case "ready":
+      if (ctx.fullLoaded) return { text: `\u5DF2\u542F\u7528 \xB7 ${entries}\uFF0C\u79BB\u7EBF\u53EF\u7528`, warn: false };
+      return { text: status.phase === "ready" ? "\u5DF2\u4E0B\u8F7D\uFF0C\u505C\u624B\u540E\u81EA\u52A8\u542F\u7528" : "\u5DF2\u4E0B\u8F7D\uFF0C\u4E0B\u6B21\u6253\u5F00\u65F6\u542F\u7528", warn: false };
+    case "downloading":
+      return { text: `\u6B63\u5728\u4E0B\u8F7D ${size}\uFF0C\u53EF\u7EE7\u7EED\u6253\u5B57`, warn: false, action: { kind: "pause", label: "\u6682\u505C" } };
+    case "verifying":
+      return { text: "\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u6B63\u5728\u6821\u9A8C", warn: false };
+    case "waiting": {
+      if (status.error?.kind === "offline") return { text: "\u7B49\u5F85\u8054\u7F51\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED", warn: false };
+      const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 6e4)) : 0;
+      return { text: minutes > 5 ? `\u6682\u672A\u4E0B\u5B8C\uFF0C\u7EA6 ${minutes} \u5206\u949F\u540E\u81EA\u52A8\u91CD\u8BD5` : "\u6682\u672A\u4E0B\u5B8C\uFF0C\u7A0D\u540E\u81EA\u52A8\u91CD\u8BD5", warn: false, action: { kind: "retry", label: "\u7ACB\u5373\u91CD\u8BD5" } };
+    }
+    case "paused":
+      if (status.pausedReason === "baseOnly") return { text: "\u53EA\u7528\u57FA\u7840\u8BCD\u5E93", warn: false, action: { kind: "restore", label: "\u6062\u590D" } };
+      return { text: `\u5DF2\u6682\u505C${status.segmentsDone ? ` \xB7 \u5DF2\u4E0B\u8F7D ${mb(status.bytesDone)} MB` : ""}`, warn: false, action: { kind: "resume", label: "\u7EE7\u7EED" } };
+    case "error":
+      if (status.error?.kind === "storage") return { text: "\u5B58\u50A8\u7A7A\u95F4\u4E0D\u8DB3\uFF0C\u91CA\u653E\u7A7A\u95F4\u540E\u70B9\u91CD\u8BD5", warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } };
+      return { text: "\u8FD9\u4E2A\u7248\u672C\u542F\u7528\u6216\u6821\u9A8C\u5931\u8D25\uFF0C\u5DF2\u505C\u7528", warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } };
+    default:
+      return {
+        text: status.segmentsDone ? `\u5DF2\u4E0B\u8F7D ${size}\uFF0C\u7A0D\u540E\u81EA\u52A8\u63A5\u7740\u4E0B` : `\u672A\u4E0B\u8F7D\uFF08${approxSize(catalog)}\uFF09\uFF0C\u7A0D\u540E\u81EA\u52A8\u4E0B\u8F7D`,
+        warn: false,
+        action: { kind: "download", label: "\u73B0\u5728\u4E0B\u8F7D" }
+      };
+  }
+}
 function describeDict(status, ctx) {
   const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
   const reason = status.error ? `\uFF08\u539F\u56E0\uFF1A${status.error.message}\uFF09` : "";
@@ -1317,37 +1356,23 @@ var DictStatusModal = class extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.empty();
     const snap = this.controls.snapshot();
-    if (!snap) {
-      contentEl.createEl("p", { text: "\u8FD9\u53F0\u8BBE\u5907\u4E0A\u65E0\u6CD5\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93\u5B58\u50A8\uFF08\u672C\u673A\u5B58\u50A8\u6253\u4E0D\u5F00\uFF09\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002" });
-      return;
+    const line = dictLine(snap?.status, snap?.ctx ?? { fullLoaded: false });
+    contentEl.createEl("p", { text: line.text, cls: line.warn ? "just-type-dict-warn" : "" });
+    if (snap) {
+      const { status } = snap;
+      const failing = status.error && status.error.kind !== "offline" && (status.phase === "waiting" || status.phase === "error");
+      if (failing) contentEl.createEl("p", { cls: "just-type-dict-note", text: `\u539F\u56E0\uFF1A${status.error.message}` });
+      if (status.phase === "downloading" || status.segmentsDone > 0 && status.segmentsDone < status.segmentsTotal) {
+        const bar = contentEl.createEl("progress");
+        bar.max = status.bytesTotal;
+        bar.value = status.bytesDone;
+      }
+      contentEl.createEl("p", { cls: "just-type-dict-note", text: "\u6765\u81EA\u96FE\u51C7\u62FC\u97F3 \xB7 \u53EA\u5B58\u5728\u8FD9\u53F0\u8BBE\u5907 \xB7 \u4E0D\u5F71\u54CD\u5B66\u4E60\u8BB0\u5F55" });
     }
-    const { status, ctx } = snap;
-    const description = describeDict(status, ctx);
-    contentEl.createEl("p", { text: description.detail, cls: description.attention ? "mod-warning" : "" });
-    if (status.phase === "downloading" || status.segmentsDone > 0 && status.segmentsDone < status.segmentsTotal) {
-      const bar = contentEl.createEl("progress");
-      bar.max = status.bytesTotal;
-      bar.value = status.bytesDone;
-    }
-    contentEl.createEl("p", {
-      cls: "just-type-dict-note",
-      text: `\u8BCD\u5E93\u6765\u81EA\u96FE\u51C7\u62FC\u97F3\uFF08${status.catalog.license}\uFF09\uFF0C\u4ECE npmmirror \u4E0B\u8F7D\uFF0C\u5907\u7528 npmjs\uFF1B\u6BCF\u4E00\u6BB5\u90FD\u548C\u63D2\u4EF6\u5185\u7F6E\u7684\u6821\u9A8C\u503C\u6838\u5BF9\u3002\u53EA\u5B58\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\uFF0C\u4E0D\u968F Obsidian Sync \u540C\u6B65\u3002\u6362\u8BCD\u5E93\u4E0D\u5F71\u54CD\u5B66\u4E60\u8BB0\u5F55\u3002`
-    });
     const actions = contentEl.createDiv({ cls: "just-type-diag-actions" });
-    const button = (text, onClick, cta = false) => {
-      actions.createEl("button", { text, cls: cta ? "mod-cta" : "" }).addEventListener("click", onClick);
-    };
-    const complete = status.segmentsDone === status.segmentsTotal;
-    if (status.pausedReason === "baseOnly") {
-      button("\u6062\u590D\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93", () => this.controls.setBaseOnly(false), true);
-    } else {
-      if (!complete || status.phase === "error") button("\u7ACB\u5373\u91CD\u8BD5", () => this.controls.retry(), true);
-      if (status.pausedReason === "paused") button("\u7EE7\u7EED\u4E0B\u8F7D", () => this.controls.resume(), true);
-      else if (!complete) button("\u6682\u505C\u81EA\u52A8\u4E0B\u8F7D", () => this.controls.pause());
-      button("\u53EA\u7528\u57FA\u7840\u8BCD\u5E93", () => this.controls.setBaseOnly(true));
-    }
-    if (status.segmentsDone > 0) button("\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93", () => this.controls.remove());
-    button("\u5173\u95ED", () => this.close());
+    const action = line.action;
+    if (action) actions.createEl("button", { text: action.label, cls: "mod-cta" }).addEventListener("click", () => this.controls.run(action.kind));
+    actions.createEl("button", { text: "\u5173\u95ED" }).addEventListener("click", () => this.close());
   }
   onClose() {
     this.unsubscribe?.();
@@ -1773,6 +1798,10 @@ var UpdateChecker = class {
     if (!latest || compareVersions(latest.version, this.current) <= 0) return void 0;
     return latest;
   }
+  /** 上次成功拿到版本信息的时间；从没成功过是 undefined。 */
+  lastCheckedAt() {
+    return this.state.lastSuccessAt;
+  }
   isIgnored(version) {
     return this.state.ignoredVersion === version;
   }
@@ -1820,9 +1849,10 @@ var RELEASE_NOTES = [
     version: "0.7.24",
     items: [
       "\u5B8C\u6574\u8BCD\u5E93\uFF08\u7EA6 187 \u4E07\u6761\uFF0C\u6765\u81EA\u96FE\u51C7\u62FC\u97F3\uFF09\uFF1A\u6253\u5F00\u540E\u5148\u7528\u5185\u7F6E\u8BCD\u5E93\uFF0C\u9A6C\u4E0A\u80FD\u6253\u5B57\uFF1B\u540E\u53F0\u81EA\u52A8\u4E0B\u8F7D\u7EA6 26 MB\uFF0C\u4E0B\u597D\u540E\u5728\u4F60\u505C\u624B\u65F6\u81EA\u52A8\u6362\u4E0A\uFF0C\u4E4B\u540E\u79BB\u7EBF\u53EF\u7528\u3002\u4E09\u5B57\u8BCD\u3001\u56DB\u5B57\u6210\u8BED\u660E\u663E\u66F4\u51C6",
-      "\u56FD\u5185\u4ECE npmmirror \u4E0B\u8F7D\uFF0C\u4E0D\u7528\u7FFB\u5899\uFF1B\u6BCF\u4E00\u6BB5\u90FD\u6838\u5BF9\u6821\u9A8C\u503C\uFF0C\u4E0B\u8F7D\u4E2D\u65AD\u4E0B\u6B21\u63A5\u7740\u4E0B",
-      "\u7B14\u8BB0\u53F3\u4E0A\u89D2\u663E\u793A\u4E0B\u8F7D\u8FDB\u5EA6\uFF1B\u8BBE\u7F6E\u300C\u5B8C\u6574\u8BCD\u5E93\u300D\u91CC\u53EF\u4EE5\u6682\u505C\u3001\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\u6216\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u6570\u636E",
-      "\u6362\u8BCD\u5E93\u4E0D\u5F71\u54CD\u8F93\u5165\u6CD5\u5DF2\u7ECF\u8BB0\u4F4F\u7684\u4F60\u7684\u7528\u8BCD\u4E60\u60EF"
+      "\u56FD\u5185\u4ECE npmmirror \u4E0B\u8F7D\uFF0C\u4E0D\u7528\u7FFB\u5899\uFF1B\u5B83\u6162\u65F6\u81EA\u52A8\u6539\u4ECE\u56FD\u5916\u6E90\u4E0B\u3002\u6BCF\u4E00\u6BB5\u90FD\u6838\u5BF9\u6821\u9A8C\u503C\uFF0C\u65AD\u7F51\u6216\u4E2D\u65AD\u540E\u81EA\u52A8\u63A5\u7740\u4E0B",
+      "\u7B14\u8BB0\u53F3\u4E0A\u89D2\u663E\u793A\u4E0B\u8F7D\u8FDB\u5EA6\uFF1B\u8BBE\u7F6E\u91CC\u300C\u5B8C\u6574\u8BCD\u5E93\u300D\u4E00\u884C\u5C31\u80FD\u770B\u72B6\u6001\u3001\u6682\u505C\u6216\u91CD\u8BD5",
+      "\u6362\u8BCD\u5E93\u4E0D\u5F71\u54CD\u8F93\u5165\u6CD5\u5DF2\u7ECF\u8BB0\u4F4F\u7684\u4F60\u7684\u7528\u8BCD\u4E60\u60EF",
+      "\u8BBE\u7F6E\u9875\u66F4\u7B80\u6D01\uFF1A\u5B8C\u6574\u8BCD\u5E93\u3001\u65B0\u7248\u672C\u63D0\u9192\u5404\u53EA\u5360\u4E00\u884C"
     ]
   },
   {
@@ -1858,7 +1888,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "0.7.24";
-var BUILD_TIME = true ? "2026/9/27 23:22:09" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/27 23:46:45" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2127,11 +2157,11 @@ var MODE_NOTICE = {
   english: "\u82F1\u6587",
   emoji: "\u8868\u60C5 \u2014 \u6253\u5173\u952E\u8BCD\u641C\u7D22\uFF0C\u5982 xiao / smile / huo\u3002\u6309 Shift \u56DE\u4E2D\u6587"
 };
-var UPDATE_DESC = "\u6BCF 24 \u5C0F\u65F6\u6700\u591A\u8054\u7F51\u4E00\u6B21\uFF08npmmirror\uFF0C\u5907\u9009 jsDelivr\u3001GitHub\uFF09\uFF0C\u53EA\u8BFB\u53D6\u6700\u65B0\u7248\u672C\u53F7\u548C\u4E00\u53E5\u66F4\u65B0\u8981\u70B9\uFF0C\u4E0D\u53D1\u9001\u4EFB\u4F55\u672C\u673A\u6570\u636E\u3002\u66F4\u65B0\u4ECD\u7531\u4F60\u5728\u63D2\u4EF6\u9875\u81EA\u5DF1\u70B9\u300C\u66F4\u65B0\u300D\u3002\u6BCF\u53F0\u8BBE\u5907\u5206\u522B\u63D0\u9192\u3002";
 var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    this.cleanups = [];
   }
   getSettingDefinitions() {
     return [{
@@ -2162,44 +2192,20 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
     }, {
+      // 状态会变，用 render 在打开设置时实时绘制，并跟着下载进度刷新（写死的 desc 会停在插件刚加载时的样子）。
       name: "\u5B8C\u6574\u8BCD\u5E93",
-      desc: `${this.plugin.dictSummary()} \u70B9\u8FD9\u91CC\u770B\u8BE6\u60C5\u3001\u6682\u505C\u6216\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\u3002`,
-      aliases: ["dictionary", "\u8BCD\u5E93", "\u5B8C\u6574\u8BCD\u5E93", "\u4E0B\u8F7D", "\u96FE\u51C7", "rime-ice"],
-      action: () => this.plugin.openDictStatus()
+      aliases: ["dictionary", "\u8BCD\u5E93", "\u5B8C\u6574\u8BCD\u5E93", "\u4E0B\u8F7D", "\u6682\u505C", "\u91CD\u8BD5", "\u96FE\u51C7", "rime-ice"],
+      render: (setting) => this.plugin.renderDictSetting(setting)
     }, {
-      name: "\u7ACB\u5373\u91CD\u8BD5\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93",
-      desc: "\u9A6C\u4E0A\u5F00\u59CB\u65B0\u4E00\u8F6E\u4E0B\u8F7D\uFF0C\u4E0D\u7B49\u81EA\u52A8\u91CD\u8BD5\u3002\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u4E0D\u4F1A\u91CD\u4E0B\u3002",
-      aliases: ["retry", "dictionary", "\u91CD\u8BD5", "\u8BCD\u5E93"],
-      action: () => this.plugin.dictRetry()
-    }, {
-      name: "\u6682\u505C\u6216\u7EE7\u7EED\u81EA\u52A8\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93",
-      desc: "\u6682\u505C\u540E\u91CD\u5F00 Obsidian \u4E5F\u4FDD\u6301\u6682\u505C\uFF0C\u76F4\u5230\u4F60\u70B9\u7EE7\u7EED\u3002\u5DF2\u4E0B\u8F7D\u7684\u90E8\u5206\u4FDD\u7559\u3002",
-      aliases: ["pause", "resume", "dictionary", "\u6682\u505C", "\u7EE7\u7EED", "\u8BCD\u5E93"],
-      action: () => this.plugin.dictTogglePause()
-    }, {
-      name: "\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192",
-      desc: UPDATE_DESC,
-      aliases: ["update", "version", "\u66F4\u65B0", "\u7248\u672C", "\u63D0\u9192"],
-      control: { type: "toggle", key: "updateCheck" }
-    }, {
-      name: "\u73B0\u5728\u68C0\u67E5\u65B0\u7248\u672C",
-      desc: "\u7ACB\u5373\u8054\u7F51\u67E5\u4E00\u6B21\uFF0C\u4E0D\u53D7 24 \u5C0F\u65F6\u95F4\u9694\u9650\u5236\u3002",
-      aliases: ["check", "update", "\u68C0\u67E5\u66F4\u65B0"],
-      action: () => void this.plugin.checkUpdateNow()
-    }, {
-      name: "\u4E0D\u518D\u63D0\u9192\u5DF2\u53D1\u73B0\u7684\u65B0\u7248\u672C",
-      desc: "\u53EA\u5BF9\u76EE\u524D\u53D1\u73B0\u7684\u8FD9\u4E2A\u7248\u672C\u751F\u6548\uFF1B\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002",
-      aliases: ["ignore", "update", "\u4E0D\u518D\u63D0\u9192"],
-      action: () => this.plugin.ignorePendingUpdate()
-    }, {
-      name: "\u67E5\u770B\u6700\u8FD1\u66F4\u65B0",
-      desc: "\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002",
-      aliases: ["changelog", "what's new", "\u66F4\u65B0\u8BF4\u660E"],
-      action: () => this.plugin.openWhatsNew()
+      name: "\u65B0\u7248\u672C\u63D0\u9192",
+      aliases: ["update", "version", "\u66F4\u65B0", "\u7248\u672C", "\u63D0\u9192", "\u68C0\u67E5", "\u6700\u8FD1\u66F4\u65B0", "changelog"],
+      render: (setting) => this.plugin.renderUpdateSetting(setting)
     }];
   }
+  /* 旧版 Obsidian（没有声明式设置）走 display()：两行实时状态的订阅在 hide() 时取消。 */
   display() {
     const { containerEl } = this;
+    for (const cleanup of this.cleanups.splice(0)) cleanup();
     containerEl.empty();
     new import_obsidian3.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
@@ -2231,15 +2237,12 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian3.Setting(containerEl).setName("\u5B8C\u6574\u8BCD\u5E93").setDesc(this.plugin.dictSummary()).addButton((button) => button.setButtonText("\u8BE6\u60C5").onClick(() => this.plugin.openDictStatus())).addButton((button) => button.setButtonText("\u7ACB\u5373\u91CD\u8BD5").onClick(() => this.plugin.dictRetry())).addButton((button) => button.setButtonText("\u6682\u505C\uFF0F\u7EE7\u7EED").onClick(() => this.plugin.dictTogglePause()));
-    new import_obsidian3.Setting(containerEl).setName("\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192").setDesc(UPDATE_DESC).addToggle((toggle) => {
-      toggle.setValue(this.plugin.settings.updateCheck);
-      toggle.onChange(async (value) => {
-        this.plugin.settings.updateCheck = value;
-        await this.plugin.saveData(this.plugin.settings);
-      });
-    }).addButton((button) => button.setButtonText("\u73B0\u5728\u68C0\u67E5").onClick(() => void this.plugin.checkUpdateNow()));
-    new import_obsidian3.Setting(containerEl).setName("\u6700\u8FD1\u66F4\u65B0").setDesc("\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openWhatsNew()));
+    this.cleanups.push(this.plugin.renderDictSetting(new import_obsidian3.Setting(containerEl)));
+    this.cleanups.push(this.plugin.renderUpdateSetting(new import_obsidian3.Setting(containerEl)));
+  }
+  hide() {
+    super.hide();
+    for (const cleanup of this.cleanups.splice(0)) cleanup();
   }
 };
 var WhatsNewModal = class extends import_obsidian3.Modal {
@@ -2697,38 +2700,112 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
         this.dictListeners.add(listener);
         return () => this.dictListeners.delete(listener);
       },
-      retry: () => this.dictRetry(),
-      pause: () => void this.dict?.pause(),
-      resume: () => void this.dict?.resume(),
-      setBaseOnly: (on) => {
-        if (!on) this.activationFailedThisRun = false;
-        void this.dict?.setBaseOnly(on);
-      },
-      remove: () => void this.dict?.removeDownloaded().then(() => new import_obsidian3.Notice("\u5DF2\u5220\u9664\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93\uFF0C\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002\u4E4B\u540E\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u9700\u8981\u65F6\u53EF\u5728\u8BBE\u7F6E\u91CC\u6062\u590D\u3002", 8e3))
+      run: (kind) => this.runDictAction(kind)
     };
+  }
+  runDictAction(kind) {
+    const dict = this.dict;
+    if (!dict) return;
+    if (kind === "pause") void dict.pause();
+    else if (kind === "resume") void dict.resume();
+    else {
+      this.activationFailedThisRun = false;
+      void (kind === "restore" ? dict.setBaseOnly(false) : dict.retryNow());
+    }
   }
   openDictStatus() {
     new DictStatusModal(this.app, this.dictControls()).open();
   }
-  dictSummary() {
-    return this.dict ? describeDict(this.dict.status(), this.dictContext()).detail : "\u8FD9\u53F0\u8BBE\u5907\u4E0A\u5B8C\u6574\u8BCD\u5E93\u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002";
+  /** 设置页「完整词库」一行：一句实时状态，加此刻唯一有意义的按钮；不常用的操作收在「⋯」里。 */
+  renderDictSetting(setting) {
+    setting.setName("\u5B8C\u6574\u8BCD\u5E93");
+    let button;
+    setting.addButton((b) => {
+      button = b;
+      b.onClick(() => {
+        const action = dictLine(this.dict?.status(), this.dictContext()).action;
+        if (action) this.runDictAction(action.kind);
+      });
+    });
+    setting.addExtraButton((b) => b.setIcon("more-horizontal").setTooltip("\u66F4\u591A").onClick(() => this.showDictMenu(b.extraSettingsEl)));
+    const refresh = () => {
+      const line = dictLine(this.dict?.status(), this.dictContext());
+      setting.setDesc(line.text);
+      setting.descEl.toggleClass("just-type-dict-warn", line.warn);
+      button?.buttonEl.toggleClass("just-type-hidden", !line.action);
+      if (line.action) button?.setButtonText(line.action.label);
+    };
+    refresh();
+    this.dictListeners.add(refresh);
+    return () => this.dictListeners.delete(refresh);
   }
-  dictRetry() {
-    if (!this.dict) return;
-    this.activationFailedThisRun = false;
-    void this.dict.retryNow();
-    new import_obsidian3.Notice("\u5F00\u59CB\u91CD\u65B0\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u5DF2\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u4E0D\u4F1A\u91CD\u4E0B\u3002", 5e3);
-  }
-  dictTogglePause() {
+  showDictMenu(anchor) {
     const dict = this.dict;
     if (!dict) return;
-    if (dict.status().pausedReason === "paused") {
-      void dict.resume();
-      new import_obsidian3.Notice("\u7EE7\u7EED\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\u3002", 5e3);
+    const status = dict.status();
+    const menu = new import_obsidian3.Menu();
+    if (status.pausedReason === "baseOnly") {
+      menu.addItem((item) => item.setTitle("\u6062\u590D\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93").setIcon("rotate-ccw").onClick(() => this.runDictAction("restore")));
     } else {
-      void dict.pause();
-      new import_obsidian3.Notice("\u5DF2\u6682\u505C\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u91CD\u5F00 Obsidian \u4E5F\u4FDD\u6301\u6682\u505C\uFF0C\u53EF\u968F\u65F6\u7EE7\u7EED\u3002", 6e3);
+      menu.addItem((item) => item.setTitle("\u53EA\u7528\u57FA\u7840\u8BCD\u5E93").setIcon("circle-slash").onClick(() => void dict.setBaseOnly(true)));
     }
+    if (status.segmentsDone > 0) {
+      menu.addItem((item) => item.setTitle(`\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93\uFF08\u91CA\u653E\u7EA6 ${Math.round(status.bytesDone / 1e6)} MB\uFF09`).setIcon("trash-2").onClick(() => void dict.removeDownloaded()));
+    }
+    const rect = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom });
+  }
+  /** 设置页「新版本提醒」一行：一句状态和开关；有新版本时多一个「去更新」；「⋯」里是现在检查、最近更新、不再提醒。 */
+  renderUpdateSetting(setting) {
+    setting.setName("\u65B0\u7248\u672C\u63D0\u9192");
+    let goButton;
+    const refresh = () => {
+      setting.setDesc(this.updateLine());
+      goButton?.buttonEl.toggleClass("just-type-hidden", !this.pendingUpdate());
+    };
+    setting.addButton((b) => {
+      goButton = b;
+      b.setButtonText("\u53BB\u66F4\u65B0").setCta().onClick(() => this.openPluginPage());
+    });
+    setting.addToggle((toggle) => toggle.setValue(this.settings.updateCheck).onChange(async (value) => {
+      this.settings.updateCheck = value;
+      await this.saveData(this.settings);
+      refresh();
+      if (value) void this.updates?.maybeCheck().then((got) => {
+        if (got) this.remindIfNewer();
+        refresh();
+      });
+    }));
+    setting.addExtraButton((b) => b.setIcon("more-horizontal").setTooltip("\u66F4\u591A").onClick(() => this.showUpdateMenu(b.extraSettingsEl, refresh)));
+    refresh();
+    return () => void 0;
+  }
+  /** 已发现、没被「不再提醒」、且提醒开着的新版本。 */
+  pendingUpdate() {
+    const info = this.updates?.newer();
+    return info && this.settings.updateCheck && !this.updates.isIgnored(info.version) ? info : void 0;
+  }
+  updateLine() {
+    if (!this.settings.updateCheck) return `\u5F53\u524D ${PLUGIN_VERSION} \xB7 \u5DF2\u5173\u95ED\uFF0C\u4E0D\u8054\u7F51\u68C0\u67E5`;
+    const pending = this.pendingUpdate();
+    if (pending) return `\u6709\u65B0\u7248\u672C ${pending.version}${pending.headline ? `\uFF1A${pending.headline}` : ""}`;
+    const ignored = this.updates?.newer();
+    if (ignored) return `\u5F53\u524D ${PLUGIN_VERSION}\uFF08\u5DF2\u4E0D\u518D\u63D0\u9192 ${ignored.version}\uFF09`;
+    return this.updates?.lastCheckedAt() ? `\u5F53\u524D ${PLUGIN_VERSION}\uFF0C\u5DF2\u662F\u6700\u65B0` : `\u5F53\u524D ${PLUGIN_VERSION}`;
+  }
+  showUpdateMenu(anchor, refresh) {
+    const menu = new import_obsidian3.Menu();
+    menu.addItem((item) => item.setTitle("\u73B0\u5728\u68C0\u67E5").setIcon("refresh-cw").onClick(() => void this.checkUpdateNow().then(refresh)));
+    menu.addItem((item) => item.setTitle("\u67E5\u770B\u6700\u8FD1\u66F4\u65B0").setIcon("scroll-text").onClick(() => this.openWhatsNew()));
+    const pending = this.pendingUpdate();
+    if (pending) {
+      menu.addItem((item) => item.setTitle(`\u4E0D\u518D\u63D0\u9192 ${pending.version}`).setIcon("bell-off").onClick(() => {
+        this.ignorePendingUpdate();
+        refresh();
+      }));
+    }
+    const rect = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom });
   }
   /* ---------------- diagnostics ---------------- */
   log(message) {
