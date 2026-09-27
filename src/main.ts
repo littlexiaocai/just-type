@@ -5,7 +5,7 @@ import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, loadLocalAssets, type LocalAssets } from "./assets";
 import { searchEmoji, type EmojiEntry } from "./emoji";
 
-const PLUGIN_VERSION = "0.7.19";
+const PLUGIN_VERSION = "0.7.20";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";
@@ -151,6 +151,22 @@ function patchWorkerSource(source: string): string {
   return source.replace(WORKER_STROKE_DEP, "bi=[]");
 }
 
+/**
+ * 候选按钮的「点一下」。
+ *
+ * iPadOS 上只在 pointerdown 里 preventDefault 拦不住失焦：手指一碰，正文或标题就先失焦。
+ * 正文（CodeMirror）自己记着光标，失焦了照样能插；内联标题是普通可编辑元素，失焦后
+ * 引擎结果异步回来时已不在手势里，系统不让代码把焦点放回去，字就上不了屏（0.7.20 标题点选失败）。
+ * 在 touchstart 上 preventDefault 才能让焦点留在原处；代价是系统不再合成 click，所以改在抬起时选词。
+ */
+function bindTap(button: HTMLElement, onTap: () => void): void {
+  button.addEventListener("touchstart", (event) => event.preventDefault(), { passive: false });
+  button.addEventListener("pointerdown", (event) => event.preventDefault());
+  button.addEventListener("pointerup", (event) => {
+    if (event.button === 0) onTap();
+  });
+}
+
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */
 function isSystemImeComposing(event: KeyboardEvent): boolean {
   return event.isComposing || event.keyCode === 229;
@@ -261,10 +277,21 @@ const KEY_MAP: Record<string, string> = {
   "!": "exclam",
   ";": "semicolon",
   ":": "colon",
-  "'": "apostrophe"
+  "'": "apostrophe",
+  "/": "slash",
+  "\\": "backslash"
 };
 
-const START_PUNCTUATION = new Set([",", ".", "?", "!", ";", ":"]);
+const START_PUNCTUATION = new Set([",", ".", "?", "!", ";", ":", "/", "\\"]);
+
+/* 方案里 / 和 \ 都是以「、」打头的标点菜单（后面还有 ／ ÷ 之类）。中文输入法的习惯是
+   按下直接出顿号，所以菜单首项是「、」时立即确认，不让用户再按一次空格。 */
+const COMMA_KEYS = new Set(["/", "\\"]);
+
+/* 就打个字能接管的输入位置：正文编辑器，或笔记顶部的内联标题（普通的可编辑元素，不是 CodeMirror）。 */
+type InputSink =
+  | { kind: "editor"; view: MarkdownView }
+  | { kind: "title"; el: HTMLElement; range?: Range };
 
 type InputMode = "chinese" | "english" | "emoji";
 
@@ -469,6 +496,9 @@ export default class JustTypePlugin extends Plugin {
   private candidates?: HTMLDivElement;
   /* 当前画着行内拼音的那个编辑器。清除时必须清它，而不是清「现在的活动编辑器」。 */
   private inlineTarget?: EditorView;
+  /* iPad 上手指一按候选栏，编辑器就先失焦。记下按下的时刻，这之后短时间内的失焦不当成「离开」。 */
+  private panelPressAt = -Infinity;
+  private activeSink?: InputSink;
   private status?: HTMLElement;
   private ribbon?: HTMLElement;
   private inputSequence = 0;
@@ -574,7 +604,7 @@ export default class JustTypePlugin extends Plugin {
     const types = ["beforeinput", "input", "compositionstart", "compositionupdate", "compositionend"];
     for (const type of types) {
       const handler = (event: Event): void => {
-        if (!this.isEditorTarget(event.target)) return;
+        if (!this.isInputTarget(event.target)) return;
         this.noteSystemIme(event);
         this.trace(type, `${this.describeEvent(event)} @${this.targetTag(event.target)}`);
       };
@@ -672,6 +702,7 @@ export default class JustTypePlugin extends Plugin {
   private targetTag(target: EventTarget | null): string {
     if (!(target instanceof Element)) return "none";
     if (this.isEditorTarget(target)) return "editor";
+    if (this.titleElement(target)) return "title";
     const cls = target.className?.toString().trim().split(/\s+/)[0] ?? "";
     return cls || target.tagName.toLowerCase();
   }
@@ -872,12 +903,89 @@ export default class JustTypePlugin extends Plugin {
     this.panel.setAttribute("aria-live", "polite");
     this.preedit = this.panel.createDiv({ cls: "just-type-preedit" });
     this.candidates = this.panel.createDiv({ cls: "just-type-candidates" });
+    // 捕获阶段记录，早于 iPadOS 让编辑器失焦。标题失焦后光标位置会丢，这里先存一份。
+    this.panel.addEventListener("pointerdown", () => {
+      this.panelPressAt = performance.now();
+      const sink = this.activeSink;
+      if (sink?.kind === "title") {
+        const selection = window.getSelection();
+        if (selection?.rangeCount && sink.el.contains(selection.anchorNode)) sink.range = selection.getRangeAt(0).cloneRange();
+      }
+    }, true);
   }
 
   /* ---------------- input ---------------- */
 
   private isEditorTarget(target: EventTarget | null): boolean {
     return target instanceof Element && Boolean(target.closest(".markdown-source-view .cm-content"));
+  }
+
+  private titleElement(target: EventTarget | null): HTMLElement | null {
+    if (!(target instanceof Element)) return null;
+    const el = target.closest(".inline-title");
+    return el instanceof HTMLElement && el.isContentEditable ? el : null;
+  }
+
+  /* 正文或内联标题都算。表情模式和系统表情面板仍只管正文。 */
+  private isInputTarget(target: EventTarget | null): boolean {
+    return this.isEditorTarget(target) || Boolean(this.titleElement(target));
+  }
+
+  private sinkFor(target: EventTarget | null): InputSink | null {
+    if (this.isEditorTarget(target)) {
+      const view = this.activeEditor();
+      return view ? { kind: "editor", view } : null;
+    }
+    const el = this.titleElement(target);
+    return el ? { kind: "title", el } : null;
+  }
+
+  private insertText(sink: InputSink, text: string): void {
+    if (sink.kind === "editor") {
+      sink.view.editor.replaceSelection(text);
+      return;
+    }
+    const el = sink.el;
+    this.restoreTitleFocus(sink);
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !el.contains(selection.anchorNode)) {
+      const end = document.createRange();
+      end.selectNodeContents(el);
+      end.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(end);
+    }
+    // 走浏览器自己的插入，Obsidian 能收到正常的 input 事件并据此改文件名。
+    // execCommand 已不推荐，但在可编辑元素里仍是唯一能进撤销栈、触发原生 input 的办法；失败再手动插。
+    if (!document.execCommand("insertText", false, text)) {
+      const range = window.getSelection()?.getRangeAt(0);
+      if (!range) return;
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    }
+    sink.range = undefined;
+  }
+
+  /* 标题失焦后光标位置会丢：把焦点和按下候选栏前存的光标位置一起放回去。
+     iPadOS 只允许在手势里把焦点给可编辑元素，所以点选时要在抬手那一刻同步调用，不能等引擎结果。 */
+  private restoreTitleFocus(sink: InputSink): void {
+    if (sink.kind !== "title" || document.activeElement === sink.el) return;
+    sink.el.focus();
+    const selection = window.getSelection();
+    if (sink.range && selection) {
+      selection.removeAllRanges();
+      selection.addRange(sink.range);
+    }
+  }
+
+  /* 点完候选把焦点还回去，外接键盘才能接着打。 */
+  private refocus(sink: InputSink): void {
+    if (sink.kind === "editor") sink.view.editor.focus();
+    else if (document.activeElement !== sink.el) sink.el.focus();
   }
 
   private activeEditor(): MarkdownView | null {
@@ -901,7 +1009,7 @@ export default class JustTypePlugin extends Plugin {
   private shouldCapture(event: KeyboardEvent): boolean {
     if (this.mode !== "chinese") return this.skip("未启用");
     if (!this.ready || !this.client) return this.skip("引擎未就绪");
-    if (!this.isEditorTarget(event.target)) return this.skip("焦点不在编辑器");
+    if (!this.isInputTarget(event.target)) return this.skip("焦点不在编辑器");
     // The system IME is still composing (it was left on a Chinese layout). Letting
     // RIME also consume the key commits the same word twice.
     if (isSystemImeComposing(event)) return this.skip("系统输入法组合中");
@@ -910,7 +1018,8 @@ export default class JustTypePlugin extends Plugin {
     if (this.composing) {
       return /^[a-z0-9]$/i.test(event.key) || event.key in KEY_MAP ? true : this.skip("非拼音按键");
     }
-    if (event.shiftKey) return this.skip("带修饰键");
+    // ？！：要按 Shift 才打得出来，不能一律当修饰键放行；Shift＋字母仍放给系统（大写字母）。
+    if (event.shiftKey && !START_PUNCTUATION.has(event.key)) return this.skip("带修饰键");
     return /^[a-z]$/i.test(event.key) || START_PUNCTUATION.has(event.key) ? true : this.skip("非拼音按键");
   }
 
@@ -928,7 +1037,7 @@ export default class JustTypePlugin extends Plugin {
   private onKeyup(event: KeyboardEvent): void {
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
-    if (!this.ready || !this.isEditorTarget(event.target)) return;
+    if (!this.ready || !this.isInputTarget(event.target)) return;
     this.toggle();
   }
 
@@ -976,7 +1085,7 @@ export default class JustTypePlugin extends Plugin {
     if (isSystemImeComposing(event)) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.key.length !== 1) return;
-    if (!this.isEditorTarget(event.target)) return;
+    if (!this.isInputTarget(event.target)) return;
     this.imeTookOver = false;
     new Notice(this.readyHint(), 6000);
   }
@@ -1001,8 +1110,9 @@ export default class JustTypePlugin extends Plugin {
     }
 
     if (!this.shouldCapture(event)) return;
-    const view = this.activeEditor();
-    if (!view) return this.skip("焦点不在编辑器") as unknown as void;
+    const sink = this.sinkFor(event.target);
+    if (!sink) return this.skip("焦点不在编辑器") as unknown as void;
+    this.activeSink = sink;
 
     const rimeKey = this.toRimeKey(event);
     if (!rimeKey) return;
@@ -1016,7 +1126,8 @@ export default class JustTypePlugin extends Plugin {
     const sequence = ++this.inputSequence;
     const generation = this.editorGeneration;
     void this.client!.call<RimeResult>("process", rimeKey)
-      .then((result) => this.applyResult(result, event.key, view, sequence, generation))
+      .then((result) => COMMA_KEYS.has(event.key) ? this.confirmComma(result) : result)
+      .then((result) => this.applyResult(result, event.key, sink, sequence, generation))
       .catch((error) => {
         console.error("RIME input failed", error);
         this.log(`process("${rimeKey}") 失败：${this.errorMessage(error)}`);
@@ -1048,23 +1159,30 @@ export default class JustTypePlugin extends Plugin {
     return mapped ? `{${mapped}}` : undefined;
   }
 
-  private applyResult(result: RimeResult, originalKey: string, view: MarkdownView, sequence: number, generation: number): void {
+  /* / 或 \ 打开的是标点菜单：首项是「、」就立刻确认。前面若有拼音被顺带上屏，两段拼起来一起交出。 */
+  private async confirmComma(result: RimeResult): Promise<RimeResult> {
+    if (result.state !== 1 || result.candidates?.[0]?.text !== "、") return result;
+    const next = await this.client!.call<RimeResult>("process", "{space}");
+    return { ...next, committed: `${result.committed ?? ""}${next.committed ?? ""}` };
+  }
+
+  private applyResult(result: RimeResult, originalKey: string, sink: InputSink, sequence: number, generation: number): void {
     if (sequence <= this.discardThrough || generation !== this.editorGeneration) return;
     if (result.state === 0) {
       this.composing = false;
       this.hidePanel();
-      if (result.committed) view.editor.replaceSelection(result.committed);
+      if (result.committed) this.insertText(sink, result.committed);
       return;
     }
     if (result.state === 1) {
       this.composing = true;
-      if (result.committed) view.editor.replaceSelection(result.committed);
-      this.renderPanel(result, view);
+      if (result.committed) this.insertText(sink, result.committed);
+      this.renderPanel(result, sink);
       return;
     }
     this.composing = false;
     this.hidePanel();
-    if (result.state === 3 && originalKey.length === 1) view.editor.replaceSelection(originalKey);
+    if (result.state === 3 && originalKey.length === 1) this.insertText(sink, originalKey);
   }
 
   /* ---------------- 表情模式 ---------------- */
@@ -1139,8 +1257,10 @@ export default class JustTypePlugin extends Plugin {
         text: `${index + 1} ${hit.e}`,
         attr: { type: "button" }
       });
-      button.addEventListener("pointerdown", (event) => event.preventDefault());
-      button.addEventListener("click", () => this.commitEmoji(index, view));
+      bindTap(button, () => {
+        this.commitEmoji(index, view);
+        view.editor.focus();
+      });
     });
 
     this.positionPanel(this.caretRect(view));
@@ -1245,13 +1365,26 @@ export default class JustTypePlugin extends Plugin {
     return sep === " " ? text : text.replace(/ /g, sep);
   }
 
-  private renderPanel(result: RimeResult, view: MarkdownView): void {
+  /* 内联标题不是 CodeMirror，拿选区的位置；取不到就贴在标题下面。 */
+  private titleRect(el: HTMLElement): { left: number; top: number; bottom: number } {
+    const selection = window.getSelection();
+    if (selection?.rangeCount && el.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+      if (rect && (rect.left || rect.top)) return { left: rect.left, top: rect.top, bottom: rect.bottom };
+    }
+    const box = el.getBoundingClientRect();
+    return { left: box.left, top: box.top, bottom: box.bottom };
+  }
+
+  private renderPanel(result: RimeResult, sink: InputSink): void {
     if (!this.panel || !this.preedit || !this.candidates) return;
     const head = result.head ?? "";
     const body = result.body ?? "";
     const tail = result.tail ?? "";
     const text = this.formatPreedit(`${head}${body}${tail}`);
-    const inline = this.settings.preeditPosition === "inline" && Boolean(this.editorViewOf(view));
+    const view = sink.kind === "editor" ? sink.view : undefined;
+    const inline = this.settings.preeditPosition === "inline" && Boolean(view && this.editorViewOf(view));
     this.panel.toggleClass("is-inline", inline);
     this.preedit.setText(inline ? "" : text);
     this.setInlinePreedit(inline ? view : undefined, inline ? text : "");
@@ -1263,12 +1396,15 @@ export default class JustTypePlugin extends Plugin {
         text: `${label} ${candidate.text}${candidate.comment ? ` ${candidate.comment}` : ""}`,
         attr: { type: "button" }
       });
-      button.addEventListener("pointerdown", (event) => event.preventDefault());
-      button.addEventListener("click", () => {
+      bindTap(button, () => {
+        this.restoreTitleFocus(sink);
         const sequence = ++this.inputSequence;
         const generation = this.editorGeneration;
         void this.client!.call<string>("selectCandidateOnCurrentPage", index)
-          .then((raw) => this.applyResult(JSON.parse(raw) as RimeResult, "", view, sequence, generation))
+          .then((raw) => {
+            this.applyResult(JSON.parse(raw) as RimeResult, "", sink, sequence, generation);
+            this.refocus(sink);
+          })
           .catch((error) => {
             console.error("RIME input failed", error);
             this.log(`selectCandidate(${index}) 失败：${this.errorMessage(error)}`);
@@ -1277,7 +1413,10 @@ export default class JustTypePlugin extends Plugin {
           });
       });
     });
-    this.positionPanel((inline ? this.inlinePreeditRect() : null) ?? this.caretRect(view));
+    const anchor = sink.kind === "title"
+      ? this.titleRect(sink.el)
+      : (inline ? this.inlinePreeditRect() : null) ?? this.caretRect(sink.view);
+    this.positionPanel(anchor);
     this.panel.addClass("is-visible");
   }
 
@@ -1292,10 +1431,13 @@ export default class JustTypePlugin extends Plugin {
   }
 
   private onEditorFocusOut(event: FocusEvent): void {
-    if (!this.isEditorTarget(event.target)) return;
+    if (!this.isInputTarget(event.target)) return;
+    // iPadOS 上手指点候选，编辑器会先失焦、relatedTarget 还是空的。这时取消输入会把候选栏
+    // 藏起来，点击就落空了（0.7.19 及以前点选上不了屏）。刚按过候选栏就不算离开。
+    if (performance.now() - this.panelPressAt < 1000) return;
     const next = event.relatedTarget;
     if (next instanceof Node && this.panel?.contains(next)) return;
-    if (this.isEditorTarget(next)) return;
+    if (this.isEditorTarget(event.target) && this.isEditorTarget(next)) return;
     this.invalidateEditorContext("focusout");
   }
 

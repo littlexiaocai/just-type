@@ -438,7 +438,7 @@ function searchEmoji(query, limit) {
 }
 
 // src/main.ts
-var PLUGIN_VERSION = "0.7.19";
+var PLUGIN_VERSION = "0.7.20";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -538,6 +538,13 @@ function patchWorkerSource(source) {
   }
   return source.replace(WORKER_STROKE_DEP, "bi=[]");
 }
+function bindTap(button, onTap) {
+  button.addEventListener("touchstart", (event) => event.preventDefault(), { passive: false });
+  button.addEventListener("pointerdown", (event) => event.preventDefault());
+  button.addEventListener("pointerup", (event) => {
+    if (event.button === 0) onTap();
+  });
+}
 function isSystemImeComposing(event) {
   return event.isComposing || event.keyCode === 229;
 }
@@ -628,9 +635,12 @@ var KEY_MAP = {
   "!": "exclam",
   ";": "semicolon",
   ":": "colon",
-  "'": "apostrophe"
+  "'": "apostrophe",
+  "/": "slash",
+  "\\": "backslash"
 };
-var START_PUNCTUATION = /* @__PURE__ */ new Set([",", ".", "?", "!", ";", ":"]);
+var START_PUNCTUATION = /* @__PURE__ */ new Set([",", ".", "?", "!", ";", ":", "/", "\\"]);
+var COMMA_KEYS = /* @__PURE__ */ new Set(["/", "\\"]);
 var TOGGLE_KEY_LABEL = {
   Shift: "Shift",
   Control: "Control",
@@ -780,6 +790,8 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.emojiHits = [];
     this.ready = false;
     this.composing = false;
+    /* iPad 上手指一按候选栏，编辑器就先失焦。记下按下的时刻，这之后短时间内的失焦不当成「离开」。 */
+    this.panelPressAt = -Infinity;
     this.inputSequence = 0;
     this.discardThrough = 0;
     /* 活动编辑器换了就加一。异步结果带着按键时的 generation，对不上就丢弃，
@@ -865,7 +877,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     const types = ["beforeinput", "input", "compositionstart", "compositionupdate", "compositionend"];
     for (const type of types) {
       const handler = (event) => {
-        if (!this.isEditorTarget(event.target)) return;
+        if (!this.isInputTarget(event.target)) return;
         this.noteSystemIme(event);
         this.trace(type, `${this.describeEvent(event)} @${this.targetTag(event.target)}`);
       };
@@ -951,6 +963,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
   targetTag(target) {
     if (!(target instanceof Element)) return "none";
     if (this.isEditorTarget(target)) return "editor";
+    if (this.titleElement(target)) return "title";
     const cls = target.className?.toString().trim().split(/\s+/)[0] ?? "";
     return cls || target.tagName.toLowerCase();
   }
@@ -1119,10 +1132,78 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.panel.setAttribute("aria-live", "polite");
     this.preedit = this.panel.createDiv({ cls: "just-type-preedit" });
     this.candidates = this.panel.createDiv({ cls: "just-type-candidates" });
+    this.panel.addEventListener("pointerdown", () => {
+      this.panelPressAt = performance.now();
+      const sink = this.activeSink;
+      if (sink?.kind === "title") {
+        const selection = window.getSelection();
+        if (selection?.rangeCount && sink.el.contains(selection.anchorNode)) sink.range = selection.getRangeAt(0).cloneRange();
+      }
+    }, true);
   }
   /* ---------------- input ---------------- */
   isEditorTarget(target) {
     return target instanceof Element && Boolean(target.closest(".markdown-source-view .cm-content"));
+  }
+  titleElement(target) {
+    if (!(target instanceof Element)) return null;
+    const el = target.closest(".inline-title");
+    return el instanceof HTMLElement && el.isContentEditable ? el : null;
+  }
+  /* 正文或内联标题都算。表情模式和系统表情面板仍只管正文。 */
+  isInputTarget(target) {
+    return this.isEditorTarget(target) || Boolean(this.titleElement(target));
+  }
+  sinkFor(target) {
+    if (this.isEditorTarget(target)) {
+      const view = this.activeEditor();
+      return view ? { kind: "editor", view } : null;
+    }
+    const el = this.titleElement(target);
+    return el ? { kind: "title", el } : null;
+  }
+  insertText(sink, text) {
+    if (sink.kind === "editor") {
+      sink.view.editor.replaceSelection(text);
+      return;
+    }
+    const el = sink.el;
+    this.restoreTitleFocus(sink);
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !el.contains(selection.anchorNode)) {
+      const end = document.createRange();
+      end.selectNodeContents(el);
+      end.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(end);
+    }
+    if (!document.execCommand("insertText", false, text)) {
+      const range = window.getSelection()?.getRangeAt(0);
+      if (!range) return;
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    }
+    sink.range = void 0;
+  }
+  /* 标题失焦后光标位置会丢：把焦点和按下候选栏前存的光标位置一起放回去。
+     iPadOS 只允许在手势里把焦点给可编辑元素，所以点选时要在抬手那一刻同步调用，不能等引擎结果。 */
+  restoreTitleFocus(sink) {
+    if (sink.kind !== "title" || document.activeElement === sink.el) return;
+    sink.el.focus();
+    const selection = window.getSelection();
+    if (sink.range && selection) {
+      selection.removeAllRanges();
+      selection.addRange(sink.range);
+    }
+  }
+  /* 点完候选把焦点还回去，外接键盘才能接着打。 */
+  refocus(sink) {
+    if (sink.kind === "editor") sink.view.editor.focus();
+    else if (document.activeElement !== sink.el) sink.el.focus();
   }
   activeEditor() {
     return this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
@@ -1142,14 +1223,14 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
   shouldCapture(event) {
     if (this.mode !== "chinese") return this.skip("\u672A\u542F\u7528");
     if (!this.ready || !this.client) return this.skip("\u5F15\u64CE\u672A\u5C31\u7EEA");
-    if (!this.isEditorTarget(event.target)) return this.skip("\u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668");
+    if (!this.isInputTarget(event.target)) return this.skip("\u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668");
     if (isSystemImeComposing(event)) return this.skip("\u7CFB\u7EDF\u8F93\u5165\u6CD5\u7EC4\u5408\u4E2D");
     if (event.metaKey || event.ctrlKey || event.altKey) return this.skip("\u5E26\u4FEE\u9970\u952E");
     if (event.shiftKey && event.key.length !== 1) return this.skip("\u5E26\u4FEE\u9970\u952E");
     if (this.composing) {
       return /^[a-z0-9]$/i.test(event.key) || event.key in KEY_MAP ? true : this.skip("\u975E\u62FC\u97F3\u6309\u952E");
     }
-    if (event.shiftKey) return this.skip("\u5E26\u4FEE\u9970\u952E");
+    if (event.shiftKey && !START_PUNCTUATION.has(event.key)) return this.skip("\u5E26\u4FEE\u9970\u952E");
     return /^[a-z]$/i.test(event.key) || START_PUNCTUATION.has(event.key) ? true : this.skip("\u975E\u62FC\u97F3\u6309\u952E");
   }
   /* 单独按下并松开切换键（中间没有别的键）＝ 中/英切换。默认 Shift，可在设置里改。 */
@@ -1165,7 +1246,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
   onKeyup(event) {
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
-    if (!this.ready || !this.isEditorTarget(event.target)) return;
+    if (!this.ready || !this.isInputTarget(event.target)) return;
     this.toggle();
   }
   /* iPadOS 把「点系统表情面板」发成 keydown：key 是那个表情本身，code="Unidentified"，
@@ -1208,7 +1289,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     if (isSystemImeComposing(event)) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.key.length !== 1) return;
-    if (!this.isEditorTarget(event.target)) return;
+    if (!this.isInputTarget(event.target)) return;
     this.imeTookOver = false;
     new import_obsidian.Notice(this.readyHint(), 6e3);
   }
@@ -1228,8 +1309,9 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       return;
     }
     if (!this.shouldCapture(event)) return;
-    const view = this.activeEditor();
-    if (!view) return this.skip("\u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668");
+    const sink = this.sinkFor(event.target);
+    if (!sink) return this.skip("\u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668");
+    this.activeSink = sink;
     const rimeKey = this.toRimeKey(event);
     if (!rimeKey) return;
     event.preventDefault();
@@ -1240,7 +1322,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.pendingTrace = -1;
     const sequence = ++this.inputSequence;
     const generation = this.editorGeneration;
-    void this.client.call("process", rimeKey).then((result) => this.applyResult(result, event.key, view, sequence, generation)).catch((error) => {
+    void this.client.call("process", rimeKey).then((result) => COMMA_KEYS.has(event.key) ? this.confirmComma(result) : result).then((result) => this.applyResult(result, event.key, sink, sequence, generation)).catch((error) => {
       console.error("RIME input failed", error);
       this.log(`process("${rimeKey}") \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
       this.cancelComposition();
@@ -1267,23 +1349,29 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     const mapped = KEY_MAP[event.key];
     return mapped ? `{${mapped}}` : void 0;
   }
-  applyResult(result, originalKey, view, sequence, generation) {
+  /* / 或 \ 打开的是标点菜单：首项是「、」就立刻确认。前面若有拼音被顺带上屏，两段拼起来一起交出。 */
+  async confirmComma(result) {
+    if (result.state !== 1 || result.candidates?.[0]?.text !== "\u3001") return result;
+    const next = await this.client.call("process", "{space}");
+    return { ...next, committed: `${result.committed ?? ""}${next.committed ?? ""}` };
+  }
+  applyResult(result, originalKey, sink, sequence, generation) {
     if (sequence <= this.discardThrough || generation !== this.editorGeneration) return;
     if (result.state === 0) {
       this.composing = false;
       this.hidePanel();
-      if (result.committed) view.editor.replaceSelection(result.committed);
+      if (result.committed) this.insertText(sink, result.committed);
       return;
     }
     if (result.state === 1) {
       this.composing = true;
-      if (result.committed) view.editor.replaceSelection(result.committed);
-      this.renderPanel(result, view);
+      if (result.committed) this.insertText(sink, result.committed);
+      this.renderPanel(result, sink);
       return;
     }
     this.composing = false;
     this.hidePanel();
-    if (result.state === 3 && originalKey.length === 1) view.editor.replaceSelection(originalKey);
+    if (result.state === 3 && originalKey.length === 1) this.insertText(sink, originalKey);
   }
   /* ---------------- 表情模式 ---------------- */
   /* 返回 true 表示这个键归表情模式管，调用方负责 preventDefault。
@@ -1343,8 +1431,10 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
         text: `${index + 1} ${hit.e}`,
         attr: { type: "button" }
       });
-      button.addEventListener("pointerdown", (event) => event.preventDefault());
-      button.addEventListener("click", () => this.commitEmoji(index, view));
+      bindTap(button, () => {
+        this.commitEmoji(index, view);
+        view.editor.focus();
+      });
     });
     this.positionPanel(this.caretRect(view));
     this.panel.addClass("is-visible");
@@ -1428,13 +1518,25 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     const sep = PINYIN_SEPARATOR_CHAR[this.settings.pinyinSeparator] ?? "'";
     return sep === " " ? text : text.replace(/ /g, sep);
   }
-  renderPanel(result, view) {
+  /* 内联标题不是 CodeMirror，拿选区的位置；取不到就贴在标题下面。 */
+  titleRect(el) {
+    const selection = window.getSelection();
+    if (selection?.rangeCount && el.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+      if (rect && (rect.left || rect.top)) return { left: rect.left, top: rect.top, bottom: rect.bottom };
+    }
+    const box = el.getBoundingClientRect();
+    return { left: box.left, top: box.top, bottom: box.bottom };
+  }
+  renderPanel(result, sink) {
     if (!this.panel || !this.preedit || !this.candidates) return;
     const head = result.head ?? "";
     const body = result.body ?? "";
     const tail = result.tail ?? "";
     const text = this.formatPreedit(`${head}${body}${tail}`);
-    const inline = this.settings.preeditPosition === "inline" && Boolean(this.editorViewOf(view));
+    const view = sink.kind === "editor" ? sink.view : void 0;
+    const inline = this.settings.preeditPosition === "inline" && Boolean(view && this.editorViewOf(view));
     this.panel.toggleClass("is-inline", inline);
     this.preedit.setText(inline ? "" : text);
     this.setInlinePreedit(inline ? view : void 0, inline ? text : "");
@@ -1446,11 +1548,14 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
         text: `${label} ${candidate.text}${candidate.comment ? ` ${candidate.comment}` : ""}`,
         attr: { type: "button" }
       });
-      button.addEventListener("pointerdown", (event) => event.preventDefault());
-      button.addEventListener("click", () => {
+      bindTap(button, () => {
+        this.restoreTitleFocus(sink);
         const sequence = ++this.inputSequence;
         const generation = this.editorGeneration;
-        void this.client.call("selectCandidateOnCurrentPage", index).then((raw) => this.applyResult(JSON.parse(raw), "", view, sequence, generation)).catch((error) => {
+        void this.client.call("selectCandidateOnCurrentPage", index).then((raw) => {
+          this.applyResult(JSON.parse(raw), "", sink, sequence, generation);
+          this.refocus(sink);
+        }).catch((error) => {
           console.error("RIME input failed", error);
           this.log(`selectCandidate(${index}) \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
           this.cancelComposition();
@@ -1459,7 +1564,8 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
         });
       });
     });
-    this.positionPanel((inline ? this.inlinePreeditRect() : null) ?? this.caretRect(view));
+    const anchor = sink.kind === "title" ? this.titleRect(sink.el) : (inline ? this.inlinePreeditRect() : null) ?? this.caretRect(sink.view);
+    this.positionPanel(anchor);
     this.panel.addClass("is-visible");
   }
   /* 活动编辑器不再是按下那一键时的那个。作废在途结果，并清掉引擎组合态，
@@ -1472,10 +1578,11 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     if (noteworthy) this.log(`\u4F5C\u5E9F\u7F16\u8F91\u5668\u4E0A\u4E0B\u6587\uFF08${reason}\uFF09generation=${this.editorGeneration}`);
   }
   onEditorFocusOut(event) {
-    if (!this.isEditorTarget(event.target)) return;
+    if (!this.isInputTarget(event.target)) return;
+    if (performance.now() - this.panelPressAt < 1e3) return;
     const next = event.relatedTarget;
     if (next instanceof Node && this.panel?.contains(next)) return;
-    if (this.isEditorTarget(next)) return;
+    if (this.isEditorTarget(event.target) && this.isEditorTarget(next)) return;
     this.invalidateEditorContext("focusout");
   }
   cancelComposition() {
