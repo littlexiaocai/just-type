@@ -88,6 +88,11 @@ export interface DictConfig {
   heartbeatMs: number;
   /** 启用失败几次后隔离这个包。 */
   activationFailureLimit: number;
+  /** 判定为离线后，多久试探一次下载源能不能连上；离线超过 10 分钟后放慢到 offlineProbeSlowMs。 */
+  offlineProbeMs: number;
+  offlineProbeSlowMs: number;
+  /** 试探请求的超时。 */
+  probeTimeoutMs: number;
 }
 
 export const DEFAULT_CONFIG: DictConfig = {
@@ -97,7 +102,10 @@ export const DEFAULT_CONFIG: DictConfig = {
   requestTimeoutMs: 90_000,
   lockStaleMs: 45_000,
   heartbeatMs: 10_000,
-  activationFailureLimit: 2
+  activationFailureLimit: 2,
+  offlineProbeMs: 5_000,
+  offlineProbeSlowMs: 60_000,
+  probeTimeoutMs: 10_000
 };
 
 interface PersistedState {
@@ -478,12 +486,10 @@ export class DictManager {
       while (gen === this.generation) {
         const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
         if (missing.length) {
-          // 离线信号只当提示：定时器到点时照样试一次，免得永远卡在误判的离线里。
-          if (!navigator.onLine && reason !== "timer") {
-            if (this.state.lastError?.kind !== "offline") this.record("设备离线，等联网后自动继续（不计入重试次数）");
-            this.setWaiting({ kind: "offline", message: "设备离线，联网后自动继续" }, undefined);
-            this.armTimer(5 * 60_000);
-            return;
+          // 系统说离线只当提示，实际探一下；真连不上就等联网，不发大文件请求。
+          if (!navigator.onLine && !(await this.reachable())) {
+            if (!(await this.waitOnline(gen))) return;
+            continue;
           }
           this.phase = "downloading";
           this.emit();
@@ -532,10 +538,10 @@ export class DictManager {
     return [start, Math.min(start + seg, this.catalog.tarball.bytes) - 1];
   }
 
-  private async withTimeout<T>(promise: Promise<T>): Promise<T> {
+  private async withTimeout<T>(promise: Promise<T>, ms = this.config.requestTimeoutMs): Promise<T> {
     let timer: number | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = window.setTimeout(() => reject(new FetchFailure("timeout", "下载超时")), this.config.requestTimeoutMs);
+      timer = window.setTimeout(() => reject(new FetchFailure("timeout", "下载超时")), ms);
     });
     try {
       return await Promise.race([promise, timeout]);
@@ -599,11 +605,10 @@ export class DictManager {
     const failure = error instanceof FetchFailure ? error : new FetchFailure("network", String(error));
     this.record(`下载失败：${failure.kind} ${failure.message}（navigator.onLine=${String(navigator.onLine)}）`);
 
-    // 请求失败时设备已离线：这是网络没了，不是下载源的问题，不消耗重试次数，等联网（或 5 分钟后）再试。
-    if ((failure.kind === "network" || failure.kind === "timeout") && !navigator.onLine) {
-      this.setWaiting({ kind: "offline", message: "设备离线，联网后自动继续" }, undefined);
-      this.armTimer(5 * 60_000);
-      return false;
+    // 连接失败时先分清是不是设备没网：iPad 上飞行模式里 navigator.onLine 仍是 true，不能靠它。
+    // 两个下载源都连不上（连 HTTP 状态都拿不到）就当作离线：不消耗重试次数，等联网后立刻接着下。
+    if ((failure.kind === "network" || failure.kind === "timeout") && !(await this.reachable())) {
+      return await this.waitOnline(gen);
     }
 
     if (failure.kind === "storage") {
@@ -641,6 +646,44 @@ export class DictManager {
       this.backingOff = false;
     }
     return gen === this.generation;
+  }
+
+  /** 任一下载源能给出 HTTP 响应（任何状态码都算）就说明网络是通的。试探只取 1 字节。 */
+  private async reachable(): Promise<boolean> {
+    for (const url of this.catalog.urls) {
+      try {
+        const res = await this.withTimeout(this.fetcher(url, 0, 0), this.config.probeTimeoutMs);
+        if (res.status > 0) return true;
+      } catch {
+        // 这个源连不上，试下一个
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 等到网络恢复：状态是「等待联网」，不消耗重试次数。每隔几秒试探一次（离线超过 10 分钟后放慢），
+   * 联网、回到前台时立刻再探。探通了返回 true，由下载循环马上接着下；任务被取消返回 false。
+   */
+  private async waitOnline(gen: number): Promise<boolean> {
+    this.record("两个下载源都连不上，按离线处理：不计入重试次数，联网后自动接着下");
+    this.setWaiting({ kind: "offline", message: "设备离线，联网后自动继续" }, undefined);
+    const started = this.now();
+    while (gen === this.generation) {
+      const slow = this.now() - started > 10 * 60_000;
+      this.backingOff = true;
+      try {
+        await this.sleep(slow ? this.config.offlineProbeSlowMs : this.config.offlineProbeMs);
+      } finally {
+        this.backingOff = false;
+      }
+      if (gen !== this.generation) return false;
+      if (await this.reachable()) {
+        this.record(`网络恢复（等了 ${Math.round((this.now() - started) / 1000)} 秒），接着下载`);
+        return gen === this.generation;
+      }
+    }
+    return false;
   }
 
   private setWaiting(error: { kind: ErrorKind; message: string }, nextRetryAt: number | undefined): void {
