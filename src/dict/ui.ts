@@ -40,6 +40,54 @@ export function approxSize(catalog: DictCatalog): string {
   return `约 ${Math.round(catalog.tarball.bytes / 1e6)} MB`;
 }
 
+export type DictAction = "pause" | "resume" | "retry" | "restore" | "download";
+
+/** 设置页和详情窗用的一句话状态，加上此刻唯一有意义的一个操作（没有就不显示按钮）。 */
+export interface DictLine {
+  text: string;
+  warn: boolean;
+  action?: { kind: DictAction; label: string };
+}
+
+export function dictLine(status: DictStatus | undefined, ctx: DictUiContext): DictLine {
+  if (!status) return { text: "这台设备无法保存完整词库，基础词库照常可用", warn: false };
+  const catalog = status.catalog;
+  const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
+  const entries = catalog.entries ? `约 ${Math.round(catalog.entries / 1e4)} 万词条` : approxSize(catalog);
+  if (ctx.switching === "full") return { text: "正在启用完整词库…", warn: false };
+  if (ctx.switching === "base") return { text: "正在切回基础词库…", warn: false };
+  if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
+    return { text: "另一个 Obsidian 窗口正在下载", warn: false };
+  }
+  switch (status.phase) {
+    case "active":
+    case "ready":
+      if (ctx.fullLoaded) return { text: `已启用 · ${entries}，离线可用`, warn: false };
+      return { text: status.phase === "ready" ? "已下载，停手后自动启用" : "已下载，下次打开时启用", warn: false };
+    case "downloading":
+      return { text: `正在下载 ${size}，可继续打字`, warn: false, action: { kind: "pause", label: "暂停" } };
+    case "verifying":
+      return { text: "下载完成，正在校验", warn: false };
+    case "waiting": {
+      if (status.error?.kind === "offline") return { text: "等待联网，联网后自动继续", warn: false };
+      const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 60_000)) : 0;
+      return { text: minutes > 5 ? `暂未下完，约 ${minutes} 分钟后自动重试` : "暂未下完，稍后自动重试", warn: false, action: { kind: "retry", label: "立即重试" } };
+    }
+    case "paused":
+      if (status.pausedReason === "baseOnly") return { text: "只用基础词库", warn: false, action: { kind: "restore", label: "恢复" } };
+      return { text: `已暂停${status.segmentsDone ? ` · 已下载 ${mb(status.bytesDone)} MB` : ""}`, warn: false, action: { kind: "resume", label: "继续" } };
+    case "error":
+      if (status.error?.kind === "storage") return { text: "存储空间不足，释放空间后点重试", warn: true, action: { kind: "retry", label: "重试" } };
+      return { text: "这个版本启用或校验失败，已停用", warn: true, action: { kind: "retry", label: "重试" } };
+    default:
+      return {
+        text: status.segmentsDone ? `已下载 ${size}，稍后自动接着下` : `未下载（${approxSize(catalog)}），稍后自动下载`,
+        warn: false,
+        action: { kind: "download", label: "现在下载" }
+      };
+  }
+}
+
 export function describeDict(status: DictStatus, ctx: DictUiContext): DictDescription {
   const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
   const reason = status.error ? `（原因：${status.error.message}）` : "";
@@ -161,11 +209,7 @@ export class DictChip {
 export interface DictControls {
   snapshot(): { status: DictStatus; ctx: DictUiContext } | undefined;
   subscribe(listener: () => void): () => void;
-  retry(): void;
-  pause(): void;
-  resume(): void;
-  setBaseOnly(on: boolean): void;
-  remove(): void;
+  run(kind: DictAction): void;
 }
 
 export class DictStatusModal extends Modal {
@@ -186,38 +230,23 @@ export class DictStatusModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     const snap = this.controls.snapshot();
-    if (!snap) {
-      contentEl.createEl("p", { text: "这台设备上无法使用完整词库存储（本机存储打不开），基础词库可正常使用。" });
-      return;
+    const line = dictLine(snap?.status, snap?.ctx ?? { fullLoaded: false });
+    contentEl.createEl("p", { text: line.text, cls: line.warn ? "just-type-dict-warn" : "" });
+    if (snap) {
+      const { status } = snap;
+      const failing = status.error && status.error.kind !== "offline" && (status.phase === "waiting" || status.phase === "error");
+      if (failing) contentEl.createEl("p", { cls: "just-type-dict-note", text: `原因：${status.error!.message}` });
+      if (status.phase === "downloading" || (status.segmentsDone > 0 && status.segmentsDone < status.segmentsTotal)) {
+        const bar = contentEl.createEl("progress");
+        bar.max = status.bytesTotal;
+        bar.value = status.bytesDone;
+      }
+      contentEl.createEl("p", { cls: "just-type-dict-note", text: "来自雾凇拼音 · 只存在这台设备 · 不影响学习记录" });
     }
-    const { status, ctx } = snap;
-    const description = describeDict(status, ctx);
-    contentEl.createEl("p", { text: description.detail, cls: description.attention ? "mod-warning" : "" });
-    if (status.phase === "downloading" || (status.segmentsDone > 0 && status.segmentsDone < status.segmentsTotal)) {
-      const bar = contentEl.createEl("progress");
-      bar.max = status.bytesTotal;
-      bar.value = status.bytesDone;
-    }
-    contentEl.createEl("p", {
-      cls: "just-type-dict-note",
-      text: `词库来自雾凇拼音（${status.catalog.license}），从 npmmirror 下载，备用 npmjs；每一段都和插件内置的校验值核对。只存在这台设备上，不随 Obsidian Sync 同步。换词库不影响学习记录。`
-    });
-
     const actions = contentEl.createDiv({ cls: "just-type-diag-actions" });
-    const button = (text: string, onClick: () => void, cta = false): void => {
-      actions.createEl("button", { text, cls: cta ? "mod-cta" : "" }).addEventListener("click", onClick);
-    };
-    const complete = status.segmentsDone === status.segmentsTotal;
-    if (status.pausedReason === "baseOnly") {
-      button("恢复使用完整词库", () => this.controls.setBaseOnly(false), true);
-    } else {
-      if (!complete || status.phase === "error") button("立即重试", () => this.controls.retry(), true);
-      if (status.pausedReason === "paused") button("继续下载", () => this.controls.resume(), true);
-      else if (!complete) button("暂停自动下载", () => this.controls.pause());
-      button("只用基础词库", () => this.controls.setBaseOnly(true));
-    }
-    if (status.segmentsDone > 0) button("删除已下载的完整词库", () => this.controls.remove());
-    button("关闭", () => this.close());
+    const action = line.action;
+    if (action) actions.createEl("button", { text: action.label, cls: "mod-cta" }).addEventListener("click", () => this.controls.run(action.kind));
+    actions.createEl("button", { text: "关闭" }).addEventListener("click", () => this.close());
   }
 
   onClose(): void {

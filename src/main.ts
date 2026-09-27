@@ -1,13 +1,13 @@
-import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon } from "obsidian";
+import { App, ButtonComponent, MarkdownView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
 import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictStatus } from "./dict/manager";
 import { DictStore } from "./dict/store";
-import { approxSize, describeDict, DictChip, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictControls, type DictUiContext } from "./dict/ui";
+import { approxSize, describeDict, DictChip, dictLine, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictAction, type DictControls, type DictUiContext } from "./dict/ui";
 import { searchEmoji, type EmojiEntry } from "./emoji";
-import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
+import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
 const PLUGIN_VERSION = "0.7.24";
@@ -412,9 +412,9 @@ type SkipReason =
   | "系统输入法组合中"
   | "非拼音按键";
 
-const UPDATE_DESC = "每 24 小时最多联网一次（npmmirror，备选 jsDelivr、GitHub），只读取最新版本号和一句更新要点，不发送任何本机数据。更新仍由你在插件页自己点「更新」。每台设备分别提醒。";
-
 class JustTypeSettingTab extends PluginSettingTab {
+  private cleanups: (() => void)[] = [];
+
   constructor(app: App, private plugin: JustTypePlugin) {
     super(app, plugin);
   }
@@ -448,45 +448,21 @@ class JustTypeSettingTab extends PluginSettingTab {
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
     }, {
+      // 状态会变，用 render 在打开设置时实时绘制，并跟着下载进度刷新（写死的 desc 会停在插件刚加载时的样子）。
       name: "完整词库",
-      desc: `${this.plugin.dictSummary()} 点这里看详情、暂停或只用基础词库。`,
-      aliases: ["dictionary", "词库", "完整词库", "下载", "雾凇", "rime-ice"],
-      action: () => this.plugin.openDictStatus()
+      aliases: ["dictionary", "词库", "完整词库", "下载", "暂停", "重试", "雾凇", "rime-ice"],
+      render: (setting) => this.plugin.renderDictSetting(setting)
     }, {
-      name: "立即重试下载完整词库",
-      desc: "马上开始新一轮下载，不等自动重试。已下载并核对过的部分不会重下。",
-      aliases: ["retry", "dictionary", "重试", "词库"],
-      action: () => this.plugin.dictRetry()
-    }, {
-      name: "暂停或继续自动下载完整词库",
-      desc: "暂停后重开 Obsidian 也保持暂停，直到你点继续。已下载的部分保留。",
-      aliases: ["pause", "resume", "dictionary", "暂停", "继续", "词库"],
-      action: () => this.plugin.dictTogglePause()
-    }, {
-      name: "有新版本时提醒",
-      desc: UPDATE_DESC,
-      aliases: ["update", "version", "更新", "版本", "提醒"],
-      control: { type: "toggle", key: "updateCheck" }
-    }, {
-      name: "现在检查新版本",
-      desc: "立即联网查一次，不受 24 小时间隔限制。",
-      aliases: ["check", "update", "检查更新"],
-      action: () => void this.plugin.checkUpdateNow()
-    }, {
-      name: "不再提醒已发现的新版本",
-      desc: "只对目前发现的这个版本生效；以后出了更新的版本还会提醒。",
-      aliases: ["ignore", "update", "不再提醒"],
-      action: () => this.plugin.ignorePendingUpdate()
-    }, {
-      name: "查看最近更新",
-      desc: "看看最近几个版本改了什么。",
-      aliases: ["changelog", "what's new", "更新说明"],
-      action: () => this.plugin.openWhatsNew()
+      name: "新版本提醒",
+      aliases: ["update", "version", "更新", "版本", "提醒", "检查", "最近更新", "changelog"],
+      render: (setting) => this.plugin.renderUpdateSetting(setting)
     }];
   }
 
+  /* 旧版 Obsidian（没有声明式设置）走 display()：两行实时状态的订阅在 hide() 时取消。 */
   display(): void {
     const { containerEl } = this;
+    for (const cleanup of this.cleanups.splice(0)) cleanup();
     containerEl.empty();
 
     new Setting(containerEl)
@@ -531,29 +507,13 @@ class JustTypeSettingTab extends PluginSettingTab {
         });
       });
 
-    new Setting(containerEl)
-      .setName("完整词库")
-      .setDesc(this.plugin.dictSummary())
-      .addButton((button) => button.setButtonText("详情").onClick(() => this.plugin.openDictStatus()))
-      .addButton((button) => button.setButtonText("立即重试").onClick(() => this.plugin.dictRetry()))
-      .addButton((button) => button.setButtonText("暂停／继续").onClick(() => this.plugin.dictTogglePause()));
+    this.cleanups.push(this.plugin.renderDictSetting(new Setting(containerEl)));
+    this.cleanups.push(this.plugin.renderUpdateSetting(new Setting(containerEl)));
+  }
 
-    new Setting(containerEl)
-      .setName("有新版本时提醒")
-      .setDesc(UPDATE_DESC)
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.updateCheck);
-        toggle.onChange(async (value) => {
-          this.plugin.settings.updateCheck = value;
-          await this.plugin.saveData(this.plugin.settings);
-        });
-      })
-      .addButton((button) => button.setButtonText("现在检查").onClick(() => void this.plugin.checkUpdateNow()));
-
-    new Setting(containerEl)
-      .setName("最近更新")
-      .setDesc("看看最近几个版本改了什么。")
-      .addButton((button) => button.setButtonText("查看").onClick(() => this.plugin.openWhatsNew()));
+  hide(): void {
+    super.hide();
+    for (const cleanup of this.cleanups.splice(0)) cleanup();
   }
 }
 
@@ -1064,42 +1024,121 @@ export default class JustTypePlugin extends Plugin {
         this.dictListeners.add(listener);
         return () => this.dictListeners.delete(listener);
       },
-      retry: () => this.dictRetry(),
-      pause: () => void this.dict?.pause(),
-      resume: () => void this.dict?.resume(),
-      setBaseOnly: (on) => {
-        if (!on) this.activationFailedThisRun = false;
-        void this.dict?.setBaseOnly(on);
-      },
-      remove: () => void this.dict?.removeDownloaded().then(() => new Notice("已删除下载的完整词库，学习记录不受影响。之后只用基础词库，需要时可在设置里恢复。", 8000))
+      run: (kind) => this.runDictAction(kind)
     };
+  }
+
+  runDictAction(kind: DictAction): void {
+    const dict = this.dict;
+    if (!dict) return;
+    if (kind === "pause") void dict.pause();
+    else if (kind === "resume") void dict.resume();
+    else {
+      // 用户明确要求：这次打开里启用失败过的包也重新检查一次。
+      this.activationFailedThisRun = false;
+      void (kind === "restore" ? dict.setBaseOnly(false) : dict.retryNow());
+    }
   }
 
   openDictStatus(): void {
     new DictStatusModal(this.app, this.dictControls()).open();
   }
 
-  dictSummary(): string {
-    return this.dict ? describeDict(this.dict.status(), this.dictContext()).detail : "这台设备上完整词库存储不可用，基础词库可正常使用。";
+  /** 设置页「完整词库」一行：一句实时状态，加此刻唯一有意义的按钮；不常用的操作收在「⋯」里。 */
+  renderDictSetting(setting: Setting): () => void {
+    setting.setName("完整词库");
+    let button: ButtonComponent | undefined;
+    setting.addButton((b) => {
+      button = b;
+      b.onClick(() => {
+        const action = dictLine(this.dict?.status(), this.dictContext()).action;
+        if (action) this.runDictAction(action.kind);
+      });
+    });
+    setting.addExtraButton((b) => b.setIcon("more-horizontal").setTooltip("更多").onClick(() => this.showDictMenu(b.extraSettingsEl)));
+    const refresh = (): void => {
+      const line = dictLine(this.dict?.status(), this.dictContext());
+      setting.setDesc(line.text);
+      setting.descEl.toggleClass("just-type-dict-warn", line.warn);
+      button?.buttonEl.toggleClass("just-type-hidden", !line.action);
+      if (line.action) button?.setButtonText(line.action.label);
+    };
+    refresh();
+    this.dictListeners.add(refresh);
+    return () => this.dictListeners.delete(refresh);
   }
 
-  dictRetry(): void {
-    if (!this.dict) return;
-    this.activationFailedThisRun = false;
-    void this.dict.retryNow();
-    new Notice("开始重新下载完整词库，已核对过的部分不会重下。", 5000);
-  }
-
-  dictTogglePause(): void {
+  private showDictMenu(anchor: HTMLElement): void {
     const dict = this.dict;
     if (!dict) return;
-    if (dict.status().pausedReason === "paused") {
-      void dict.resume();
-      new Notice("继续下载完整词库。", 5000);
+    const status = dict.status();
+    const menu = new Menu();
+    if (status.pausedReason === "baseOnly") {
+      menu.addItem((item) => item.setTitle("恢复使用完整词库").setIcon("rotate-ccw").onClick(() => this.runDictAction("restore")));
     } else {
-      void dict.pause();
-      new Notice("已暂停下载完整词库，重开 Obsidian 也保持暂停，可随时继续。", 6000);
+      menu.addItem((item) => item.setTitle("只用基础词库").setIcon("circle-slash").onClick(() => void dict.setBaseOnly(true)));
     }
+    if (status.segmentsDone > 0) {
+      menu.addItem((item) => item.setTitle(`删除已下载的完整词库（释放约 ${Math.round(status.bytesDone / 1e6)} MB）`).setIcon("trash-2").onClick(() => void dict.removeDownloaded()));
+    }
+    const rect = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom });
+  }
+
+  /** 设置页「新版本提醒」一行：一句状态和开关；有新版本时多一个「去更新」；「⋯」里是现在检查、最近更新、不再提醒。 */
+  renderUpdateSetting(setting: Setting): () => void {
+    setting.setName("新版本提醒");
+    let goButton: ButtonComponent | undefined;
+    const refresh = (): void => {
+      setting.setDesc(this.updateLine());
+      goButton?.buttonEl.toggleClass("just-type-hidden", !this.pendingUpdate());
+    };
+    setting.addButton((b) => {
+      goButton = b;
+      b.setButtonText("去更新").setCta().onClick(() => this.openPluginPage());
+    });
+    setting.addToggle((toggle) => toggle.setValue(this.settings.updateCheck).onChange(async (value) => {
+      this.settings.updateCheck = value;
+      await this.saveData(this.settings);
+      refresh();
+      if (value) void this.updates?.maybeCheck().then((got) => {
+        if (got) this.remindIfNewer();
+        refresh();
+      });
+    }));
+    setting.addExtraButton((b) => b.setIcon("more-horizontal").setTooltip("更多").onClick(() => this.showUpdateMenu(b.extraSettingsEl, refresh)));
+    refresh();
+    return () => undefined;
+  }
+
+  /** 已发现、没被「不再提醒」、且提醒开着的新版本。 */
+  private pendingUpdate(): LatestInfo | undefined {
+    const info = this.updates?.newer();
+    return info && this.settings.updateCheck && !this.updates!.isIgnored(info.version) ? info : undefined;
+  }
+
+  private updateLine(): string {
+    if (!this.settings.updateCheck) return `当前 ${PLUGIN_VERSION} · 已关闭，不联网检查`;
+    const pending = this.pendingUpdate();
+    if (pending) return `有新版本 ${pending.version}${pending.headline ? `：${pending.headline}` : ""}`;
+    const ignored = this.updates?.newer();
+    if (ignored) return `当前 ${PLUGIN_VERSION}（已不再提醒 ${ignored.version}）`;
+    return this.updates?.lastCheckedAt() ? `当前 ${PLUGIN_VERSION}，已是最新` : `当前 ${PLUGIN_VERSION}`;
+  }
+
+  private showUpdateMenu(anchor: HTMLElement, refresh: () => void): void {
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle("现在检查").setIcon("refresh-cw").onClick(() => void this.checkUpdateNow().then(refresh)));
+    menu.addItem((item) => item.setTitle("查看最近更新").setIcon("scroll-text").onClick(() => this.openWhatsNew()));
+    const pending = this.pendingUpdate();
+    if (pending) {
+      menu.addItem((item) => item.setTitle(`不再提醒 ${pending.version}`).setIcon("bell-off").onClick(() => {
+        this.ignorePendingUpdate();
+        refresh();
+      }));
+    }
+    const rect = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom });
   }
 
   /* ---------------- diagnostics ---------------- */

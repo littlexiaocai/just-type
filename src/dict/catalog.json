@@ -3,6 +3,7 @@
   "name": "just-type-dict",
   "version": "1.0.0",
   "label": "完整词库（雾凇拼音 字表＋基础＋扩充＋腾讯）",
+  "entries": 1872111,
   "source": "iDvel/rime-ice@9e66b0729083b37d217312294f6d516c8d7234be",
   "license": "GPL-3.0",
   "compiler": "librime 1.17.0_2",

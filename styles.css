@@ -199,3 +199,11 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+.just-type-dict-warn {
+  color: var(--text-warning);
+}
+
+.just-type-hidden {
+  display: none;
+}

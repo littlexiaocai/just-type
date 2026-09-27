@@ -57,12 +57,16 @@ async function main() {
 
   // 1. 源词库：按固定提交下载，逐个核对 sha256 前缀（与测试记录一致）。
   const sourceHashes = {};
+  let entries = 0;
   for (const [name, prefix] of Object.entries(SOURCES)) {
     const buf = await fetchBuffer(`https://raw.githubusercontent.com/${RIME_ICE_REPO}/${RIME_ICE_COMMIT}/cn_dicts/${name}.dict.yaml`);
     const hash = sha256(buf);
     if (!hash.startsWith(prefix)) throw new Error(`${name}.dict.yaml 的 sha256 ${hash} 与固定值 ${prefix}… 不符`);
     writeFileSync(join(WORK, `${name}.dict.yaml`), buf);
     sourceHashes[`cn_dicts/${name}.dict.yaml`] = hash;
+    // 词条数：YAML 头（到 "..." 为止）之后的非空、非注释行。
+    const body = buf.toString("utf8").split("\n...\n")[1] ?? "";
+    entries += body.split("\n").filter((line) => line.trim() && !line.startsWith("#")).length;
     console.log(`源词库 ${name}.dict.yaml  ${buf.length} B  ${hash}`);
   }
 
@@ -135,6 +139,7 @@ Just Type IME 插件的完整词库。插件首次使用时下载一次，之后
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     label: "完整词库（雾凇拼音 字表＋基础＋扩充＋腾讯）",
+    entries,
     source: `${RIME_ICE_REPO}@${RIME_ICE_COMMIT}`,
     license: "GPL-3.0",
     compiler: librime,

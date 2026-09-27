@@ -18,6 +18,8 @@ export interface DictCatalog {
   name: string;
   version: string;
   label: string;
+  /** 词条数（四个源词典合计），界面上显示「约 N 万词条」。 */
+  entries?: number;
   source: string;
   license: string;
   tarball: { filename: string; bytes: number; sha256: string; integrity: string; segmentBytes: number; segments: string[] };

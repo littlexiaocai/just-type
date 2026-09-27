@@ -3,14 +3,16 @@
 ## 最近更新 · What's new（0.7.24）
 
 - **完整词库（约 187 万条，来自雾凇拼音）**：打开后先用内置词库，马上能打字；后台自动下载约 26 MB，下好后在你停手时自动换上，之后离线可用。三字词、四字成语明显更准
-- **国内从 npmmirror 下载**，不用翻墙；每一段都核对校验值，下载中断下次接着下
-- **笔记右上角显示下载进度**；设置「完整词库」里可以暂停、只用基础词库或删除已下载的数据
+- **国内从 npmmirror 下载**，不用翻墙；它慢时自动改从国外源下。每一段都核对校验值，断网或中断后自动接着下
+- **笔记右上角显示下载进度**；设置里「完整词库」一行就能看状态、暂停或重试
 - **换词库不影响**输入法已经记住的你的用词习惯
+- **设置页更简洁**：完整词库、新版本提醒各只占一行
 
 - **Full dictionary (about 1.87 million entries, from rime-ice)**: typing works right away with the built-in dictionary; about 26 MB downloads in the background and is switched in when you pause typing, then works offline. Three-character words and four-character idioms are much more accurate
-- **Downloads from npmmirror** (reachable in mainland China); every segment is checksum-verified and an interrupted download resumes next time
-- **Progress shows at the top right of the note**; under **完整词库** in settings you can pause, keep only the base dictionary, or delete the download
+- **Downloads from npmmirror** (reachable in mainland China) and switches to the overseas source automatically when it is slow; every segment is checksum-verified and a download interrupted by going offline resumes on its own
+- **Progress shows at the top right of the note**; the **完整词库** row in settings shows the status and lets you pause or retry
 - **Switching dictionaries keeps** what the input method has learned from you
+- **Simpler settings**: the full dictionary and update reminders take one row each
 
 ### 0.7.23
 
@@ -117,12 +119,12 @@ Default traces are **redacted**: `key=<letter>` / `code=<letter key>` / `kc=<con
 Typing never waits for the network: the Pinyin engine and a base dictionary ship with the plugin, and nothing is fetched while you type. The plugin makes two kinds of requests:
 
 1. **Full dictionary (one-time download, about 26 MB).** After the base dictionary is ready, the plugin downloads a larger dictionary in the background, from `registry.npmmirror.com` (reachable in mainland China), falling back to `registry.npmjs.org`. It is the npm package [`just-type-dict`](https://www.npmjs.com/package/just-type-dict): compiled dictionary data from [rime-ice](https://github.com/iDvel/rime-ice) (GPL-3.0), no code. Every 2 MB segment and every file is checked against SHA-256 values built into the plugin before use. It is stored only on this device (not synced by Obsidian Sync) and then works offline. Switching dictionaries does not touch what the input method has learned from you. You can pause, keep only the base dictionary, or delete the download in settings under **完整词库**. Nothing about you or your notes is sent.
-2. **Update reminder (optional).** At most once every 24 hours it reads the latest version number and a one-line summary from `registry.npmmirror.com`, falling back to `cdn.jsdelivr.net` and then `api.github.com`. Turn it off with **有新版本时提醒**. Updates are always installed by you through Obsidian's own plugin page; the plugin never downloads or installs its own code.
+2. **Update reminder (optional).** At most once every 24 hours it reads the latest version number and a one-line summary from `registry.npmmirror.com`, falling back to `cdn.jsdelivr.net` and then `api.github.com`. Turn it off with the switch on the **新版本提醒** row in settings. Updates are always installed by you through Obsidian's own plugin page; the plugin never downloads or installs its own code.
 
 打字从不等网络：拼音引擎和基础词库随插件提供，打字时不联网。插件只有两类联网：
 
 1. **完整词库（一次性下载，约 26 MB）**：基础词库就绪后在后台自动下载更大的词库，来源 `registry.npmmirror.com`（国内可直接访问），备用 `registry.npmjs.org`。它是 npm 包 [`just-type-dict`](https://www.npmjs.com/package/just-type-dict)，内容是由[雾凇拼音](https://github.com/iDvel/rime-ice)（GPL-3.0）编译的词库数据，不含任何代码。每 2 MB 一段、每个文件都先和插件内置的 SHA-256 核对才会使用。只存在这台设备上（不随 Obsidian Sync 同步），下载后离线可用。换词库不影响输入法记住的你的用词习惯。可在设置「完整词库」里暂停、只用基础词库或删除已下载的数据。不发送任何关于你或你的笔记的数据。
-2. **有新版本时提醒（可关闭）**：每 24 小时最多一次，从 `registry.npmmirror.com` 读取最新版本号和一句更新要点，失败时依次尝试 `cdn.jsdelivr.net`、`api.github.com`。可在设置里关闭「有新版本时提醒」。更新始终由你在 Obsidian 插件页自己完成，插件不会自己下载或安装自己的代码。
+2. **新版本提醒（可关闭）**：每 24 小时最多一次，从 `registry.npmmirror.com` 读取最新版本号和一句更新要点，失败时依次尝试 `cdn.jsdelivr.net`、`api.github.com`。可在设置里「新版本提醒」一行关闭。更新始终由你在 Obsidian 插件页自己完成，插件不会自己下载或安装自己的代码。
 
 ## Feedback
 

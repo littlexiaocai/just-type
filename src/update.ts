@@ -168,6 +168,11 @@ export class UpdateChecker {
     return latest;
   }
 
+  /** 上次成功拿到版本信息的时间；从没成功过是 undefined。 */
+  lastCheckedAt(): number | undefined {
+    return this.state.lastSuccessAt;
+  }
+
   isIgnored(version: string): boolean {
     return this.state.ignoredVersion === version;
   }
