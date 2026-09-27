@@ -509,6 +509,7 @@ var DictManager = class {
   }
   /* ---------------- 用户意图 ---------------- */
   async pause() {
+    this.record("\u7528\u6237\uFF1A\u6682\u505C\u81EA\u52A8\u4E0B\u8F7D");
     this.state.paused = "paused";
     this.cancel();
     this.phase = "paused";
@@ -517,6 +518,7 @@ var DictManager = class {
   }
   /** 只用基础词库：保留已下载的数据，不自动下载，直到用户恢复。 */
   async setBaseOnly(on) {
+    this.record(on ? "\u7528\u6237\uFF1A\u53EA\u7528\u57FA\u7840\u8BCD\u5E93" : "\u7528\u6237\uFF1A\u6062\u590D\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93");
     this.state.paused = on ? "baseOnly" : void 0;
     if (on) {
       this.cancel();
@@ -529,6 +531,7 @@ var DictManager = class {
   }
   async resume() {
     if (this.state.paused !== "paused") return;
+    this.record("\u7528\u6237\uFF1A\u7EE7\u7EED\u4E0B\u8F7D");
     this.state.paused = void 0;
     this.phase = this.derivePhase();
     await this.save();
@@ -537,6 +540,7 @@ var DictManager = class {
   }
   /** 立即重试：开始新的一轮（仍是单任务、有限预算），隔离的包也重新检查一次。 */
   async retryNow() {
+    this.record("\u7528\u6237\uFF1A\u7ACB\u5373\u91CD\u8BD5");
     this.state.attempts = 0;
     this.state.nextRetryAt = void 0;
     this.state.lastError = void 0;
@@ -554,6 +558,7 @@ var DictManager = class {
   }
   /** 删除已下载的完整词库数据（不影响学习记录）。之后保持「只用基础词库」，不会下一秒又自动下载。 */
   async removeDownloaded() {
+    this.record("\u7528\u6237\uFF1A\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93");
     this.cancel();
     await this.store.pruneSegments();
     this.present.clear();
@@ -1772,7 +1777,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "0.7.24";
-var BUILD_TIME = true ? "2026/9/27 22:03:33" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/27 23:08:25" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";

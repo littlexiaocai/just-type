@@ -294,6 +294,7 @@ export class DictManager {
   /* ---------------- 用户意图 ---------------- */
 
   async pause(): Promise<void> {
+    this.record("用户：暂停自动下载");
     this.state.paused = "paused";
     this.cancel();
     this.phase = "paused";
@@ -303,6 +304,7 @@ export class DictManager {
 
   /** 只用基础词库：保留已下载的数据，不自动下载，直到用户恢复。 */
   async setBaseOnly(on: boolean): Promise<void> {
+    this.record(on ? "用户：只用基础词库" : "用户：恢复使用完整词库");
     this.state.paused = on ? "baseOnly" : undefined;
     if (on) {
       this.cancel();
@@ -316,6 +318,7 @@ export class DictManager {
 
   async resume(): Promise<void> {
     if (this.state.paused !== "paused") return;
+    this.record("用户：继续下载");
     this.state.paused = undefined;
     this.phase = this.derivePhase();
     await this.save();
@@ -325,6 +328,7 @@ export class DictManager {
 
   /** 立即重试：开始新的一轮（仍是单任务、有限预算），隔离的包也重新检查一次。 */
   async retryNow(): Promise<void> {
+    this.record("用户：立即重试");
     this.state.attempts = 0;
     this.state.nextRetryAt = undefined;
     this.state.lastError = undefined;
@@ -343,6 +347,7 @@ export class DictManager {
 
   /** 删除已下载的完整词库数据（不影响学习记录）。之后保持「只用基础词库」，不会下一秒又自动下载。 */
   async removeDownloaded(): Promise<void> {
+    this.record("用户：删除已下载的完整词库");
     this.cancel();
     await this.store.pruneSegments();
     this.present.clear();
