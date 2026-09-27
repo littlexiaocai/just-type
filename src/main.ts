@@ -5,7 +5,7 @@ import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
 import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictStatus } from "./dict/manager";
 import { DictStore } from "./dict/store";
-import { approxSize, describeDict, DictChip, dictLine, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictAction, type DictControls, type DictUiContext } from "./dict/ui";
+import { approxSize, DictChip, dictLine, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictAction, type DictControls, type DictUiContext } from "./dict/ui";
 import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
@@ -379,23 +379,13 @@ const PINYIN_SEPARATOR_LABEL: Record<PinyinSeparator, string> = {
   dot: "间隔点　huo·xu·hui"
 };
 
-/* 拼音画在哪。行内＝光标处带下划线（微信 / 系统输入法的样子），候选栏只剩一行；
-   候选栏上方＝0.7.17 及以前的样子，留着给行内显示出问题时退回。 */
-type PreeditPosition = "inline" | "panel";
-
-const PREEDIT_POSITION_LABEL: Record<PreeditPosition, string> = {
-  inline: "行内　拼音在光标处，和微信输入法一样",
-  panel: "候选栏上方　旧版样式"
-};
-
 interface JustTypeSettings {
   toggleKey: ToggleKey;
   pinyinSeparator: PinyinSeparator;
-  preeditPosition: PreeditPosition;
   updateCheck: boolean;
 }
 
-const DEFAULT_SETTINGS: JustTypeSettings = { toggleKey: "Shift", pinyinSeparator: "apostrophe", preeditPosition: "inline", updateCheck: true };
+const DEFAULT_SETTINGS: JustTypeSettings = { toggleKey: "Shift", pinyinSeparator: "apostrophe", updateCheck: true };
 
 const MODE_LABEL: Record<InputMode, string> = { chinese: "Just Type 中", english: "Just Type 英", emoji: "Just Type 😀" };
 const MODE_NOTICE: Record<InputMode, string> = {
@@ -430,15 +420,6 @@ class JustTypeSettingTab extends PluginSettingTab {
         options: { ...TOGGLE_KEY_LABEL }
       }
     }, {
-      name: "拼音显示位置",
-      desc: "正在打的拼音显示在哪里。只影响显示，不影响输入。",
-      aliases: ["preedit", "inline", "拼音", "行内", "位置"],
-      control: {
-        type: "dropdown",
-        key: "preeditPosition",
-        options: { ...PREEDIT_POSITION_LABEL }
-      }
-    }, {
       name: "拼音分隔符",
       desc: "拼音音节之间用什么隔开。只影响显示，不影响输入。",
       aliases: ["separator", "delimiter", "分隔", "撇号", "空格"],
@@ -449,11 +430,12 @@ class JustTypeSettingTab extends PluginSettingTab {
       }
     }, {
       // 状态会变，用 render 在打开设置时实时绘制，并跟着下载进度刷新（写死的 desc 会停在插件刚加载时的样子）。
-      name: "完整词库",
-      aliases: ["dictionary", "词库", "完整词库", "下载", "暂停", "重试", "雾凇", "rime-ice"],
+      // 词库一切就绪时这一行隐藏：正常情况下用户不需要知道词库的事。
+      name: "词库",
+      aliases: ["dictionary", "词库", "下载", "暂停", "重试", "雾凇", "rime-ice"],
       render: (setting) => this.plugin.renderDictSetting(setting)
     }, {
-      name: "新版本提醒",
+      name: `版本 ${PLUGIN_VERSION}`,
       aliases: ["update", "version", "更新", "版本", "提醒", "检查", "最近更新", "changelog"],
       render: (setting) => this.plugin.renderUpdateSetting(setting)
     }];
@@ -475,20 +457,6 @@ class JustTypeSettingTab extends PluginSettingTab {
         dropdown.setValue(this.plugin.settings.toggleKey);
         dropdown.onChange(async (value) => {
           this.plugin.settings.toggleKey = value as ToggleKey;
-          await this.plugin.saveData(this.plugin.settings);
-        });
-      });
-
-    new Setting(containerEl)
-      .setName("拼音显示位置")
-      .setDesc("正在打的拼音显示在哪里。只影响显示，不影响输入。")
-      .addDropdown((dropdown) => {
-        for (const [value, label] of Object.entries(PREEDIT_POSITION_LABEL)) {
-          dropdown.addOption(value, label);
-        }
-        dropdown.setValue(this.plugin.settings.preeditPosition);
-        dropdown.onChange(async (value) => {
-          this.plugin.settings.preeditPosition = value as PreeditPosition;
           await this.plugin.saveData(this.plugin.settings);
         });
       });
@@ -649,6 +617,8 @@ export default class JustTypePlugin extends Plugin {
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<JustTypeSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // 0.7.24 起拼音固定显示在光标处，旧版本存下的「拼音显示位置」不再使用。
+    Reflect.deleteProperty(this.settings, "preeditPosition");
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
     this.log(`插件 ${PLUGIN_VERSION} 载入`);
 
@@ -786,7 +756,7 @@ export default class JustTypePlugin extends Plugin {
         this.engineDict = "full";
         this.loadedDict = fullDictIdentity(dict.catalog);
         this.dictLog(`启动即用完整词库（取出校验＋加载共 ${Date.now() - t0}ms）`);
-        this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
+        this.noticeOnce("activated", "词库已下载好，之后不用联网");
         return client;
       } catch (error) {
         this.activationFailedThisRun = true;
@@ -822,10 +792,10 @@ export default class JustTypePlugin extends Plugin {
   private onDictStatus(status: DictStatus): void {
     this.refreshDict();
     if (status.phase === "downloading" && !status.resuming) {
-      this.noticeOnce("download-started", `基础词库已就绪，正在后台下载完整词库（${approxSize(status.catalog)}），可继续输入。`);
+      this.noticeOnce("download-started", `正在后台下载词库（${approxSize(status.catalog)}），下载期间照常打字。`);
     }
     if (status.phase === "error" && status.error) {
-      this.noticeOnce(`error-${status.error.kind}`, describeDict(status, this.dictContext()).detail, 12000);
+      this.noticeOnce(`error-${status.error.kind}`, `Just Type：${dictLine(status, this.dictContext()).text}。可在设置里重试。`, 12000);
     }
     this.syncEngine();
   }
@@ -858,7 +828,7 @@ export default class JustTypePlugin extends Plugin {
       const dict = this.dict;
       if (!dict) return;
       const view = this.activeEditor();
-      this.dictChip?.render(describeDict(dict.status(), this.dictContext()), view ? view.contentEl.getBoundingClientRect() : null);
+      this.dictChip?.render(dictLine(dict.status(), this.dictContext()), view ? view.contentEl.getBoundingClientRect() : null);
       for (const listener of this.dictListeners) listener();
     });
   }
@@ -941,7 +911,7 @@ export default class JustTypePlugin extends Plugin {
       this.loadedDict = target === "full" ? fullDictIdentity(dict!.catalog) : embeddedDictIdentity();
       if (target === "full") {
         await dict!.endActivation(true);
-        this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
+        this.noticeOnce("activated", "词库已下载好，之后不用联网");
       }
       this.dictLog(`已切换到${label}（准备＋切换共 ${Date.now() - t0}ms）`);
     } catch (error) {
@@ -1044,9 +1014,9 @@ export default class JustTypePlugin extends Plugin {
     new DictStatusModal(this.app, this.dictControls()).open();
   }
 
-  /** 设置页「完整词库」一行：一句实时状态，加此刻唯一有意义的按钮；不常用的操作收在「⋯」里。 */
+  /** 设置页「词库」一行：只在词库没准备好时出现，说一句现在怎样，加此刻唯一有意义的按钮。 */
   renderDictSetting(setting: Setting): () => void {
-    setting.setName("完整词库");
+    setting.setName("词库");
     let button: ButtonComponent | undefined;
     setting.addButton((b) => {
       button = b;
@@ -1055,9 +1025,9 @@ export default class JustTypePlugin extends Plugin {
         if (action) this.runDictAction(action.kind);
       });
     });
-    setting.addExtraButton((b) => b.setIcon("more-horizontal").setTooltip("更多").onClick(() => this.showDictMenu(b.extraSettingsEl)));
     const refresh = (): void => {
       const line = dictLine(this.dict?.status(), this.dictContext());
+      setting.settingEl.toggleClass("just-type-hidden", line.normal);
       setting.setDesc(line.text);
       setting.descEl.toggleClass("just-type-dict-warn", line.warn);
       button?.buttonEl.toggleClass("just-type-hidden", !line.action);
@@ -1068,26 +1038,19 @@ export default class JustTypePlugin extends Plugin {
     return () => this.dictListeners.delete(refresh);
   }
 
-  private showDictMenu(anchor: HTMLElement): void {
+  /** 排查问题用：删掉本机的词库数据并马上重新下载。学习记录在另一处，不受影响。 */
+  private async redownloadDict(): Promise<void> {
     const dict = this.dict;
     if (!dict) return;
-    const status = dict.status();
-    const menu = new Menu();
-    if (status.pausedReason === "baseOnly") {
-      menu.addItem((item) => item.setTitle("恢复使用完整词库").setIcon("rotate-ccw").onClick(() => this.runDictAction("restore")));
-    } else {
-      menu.addItem((item) => item.setTitle("只用基础词库").setIcon("circle-slash").onClick(() => void dict.setBaseOnly(true)));
-    }
-    if (status.segmentsDone > 0) {
-      menu.addItem((item) => item.setTitle(`删除已下载的完整词库（释放约 ${Math.round(status.bytesDone / 1e6)} MB）`).setIcon("trash-2").onClick(() => void dict.removeDownloaded()));
-    }
-    const rect = anchor.getBoundingClientRect();
-    menu.showAtPosition({ x: rect.left, y: rect.bottom });
+    await dict.removeDownloaded();
+    this.activationFailedThisRun = false;
+    await dict.setBaseOnly(false);
+    new Notice("已删除本机的词库数据，正在重新下载。学习记录不受影响。", 6000);
   }
 
-  /** 设置页「新版本提醒」一行：一句状态和开关；有新版本时多一个「去更新」；「⋯」里是现在检查、最近更新、不再提醒。 */
+  /** 设置页「版本」一行：当前版本和一句状态，开关＝有新版本时提醒我；有新版本时多一个「去更新」；「⋯」里是现在检查、最近更新、不再提醒。 */
   renderUpdateSetting(setting: Setting): () => void {
-    setting.setName("新版本提醒");
+    setting.setName(`版本 ${PLUGIN_VERSION}`);
     let goButton: ButtonComponent | undefined;
     const refresh = (): void => {
       setting.setDesc(this.updateLine());
@@ -1118,12 +1081,12 @@ export default class JustTypePlugin extends Plugin {
   }
 
   private updateLine(): string {
-    if (!this.settings.updateCheck) return `当前 ${PLUGIN_VERSION} · 已关闭，不联网检查`;
+    if (!this.settings.updateCheck) return "有新版本时不提醒";
     const pending = this.pendingUpdate();
     if (pending) return `有新版本 ${pending.version}${pending.headline ? `：${pending.headline}` : ""}`;
     const ignored = this.updates?.newer();
-    if (ignored) return `当前 ${PLUGIN_VERSION}（已不再提醒 ${ignored.version}）`;
-    return this.updates?.lastCheckedAt() ? `当前 ${PLUGIN_VERSION}，已是最新` : `当前 ${PLUGIN_VERSION}`;
+    if (ignored) return `有新版本 ${ignored.version}（已设为不再提醒）`;
+    return this.updates?.lastCheckedAt() ? "已是最新 · 有新版本时提醒我" : "有新版本时提醒我";
   }
 
   private showUpdateMenu(anchor: HTMLElement, refresh: () => void): void {
@@ -1515,8 +1478,13 @@ export default class JustTypePlugin extends Plugin {
     });
     this.addCommand({
       id: "dictionary-status",
-      name: "完整词库状态 (dictionary)",
+      name: "词库下载状态 (dictionary)",
       callback: () => this.openDictStatus()
+    });
+    this.addCommand({
+      id: "dictionary-redownload",
+      name: "重新下载词库（排查问题用）(redownload dictionary)",
+      callback: () => void this.redownloadDict()
     });
     this.addCommand({
       id: "whats-new",
@@ -2078,7 +2046,8 @@ export default class JustTypePlugin extends Plugin {
     const tail = result.tail ?? "";
     const text = this.formatPreedit(`${head}${body}${tail}`);
     const view = sink.kind === "editor" ? sink.view : undefined;
-    const inline = this.settings.preeditPosition === "inline" && Boolean(view && this.editorViewOf(view));
+    // 正文里拼音总是画在光标处（和微信、搜狗一样）；内联标题不是 CodeMirror，拼音显示在候选栏上方。
+    const inline = Boolean(view && this.editorViewOf(view));
     this.panel.toggleClass("is-inline", inline);
     this.preedit.setText(inline ? "" : text);
     this.setInlinePreedit(inline ? view : undefined, inline ? text : "");
