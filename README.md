@@ -1,5 +1,21 @@
 # Just Type · 就打个字
 
+## 最近更新 · What's new（0.7.20）
+
+- **笔记标题里也能打中文了**：新建笔记时直接在标题处打拼音、选词，按 Shift 切换中英文
+- **手指点候选词能上屏了**：iPad 上正文和标题都可以直接点选
+- **顿号**：中文模式下按 `/` 或 `\` 直接打出「、」
+- **中文标点更完整**：？！：单独输入时也是中文标点
+
+---
+
+- **Type Chinese in note titles**: type Pinyin right in the inline title of a new note; Shift switches Chinese / English there too
+- **Tap to select candidates**: tapping a candidate on iPad now commits it, in both the note body and the title
+- **Enumeration comma**: in Chinese mode, `/` or `\` types 「、」 directly
+- **More Chinese punctuation**: ？！： are full-width even when typed on their own
+
+更早的更新见 [Releases](https://github.com/littlexiaocai/just-type/releases) · Earlier changes: [Releases](https://github.com/littlexiaocai/just-type/releases)
+
 ## Why
 
 Just Type is an Obsidian Chinese IME for iPad hardware keyboards. It bypasses the long-standing lag of the system Pinyin IME inside Obsidian.
