@@ -9,6 +9,13 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.7.23",
+    items: [
+      "选过的词会被更可靠地记住：以前最后一次上屏的词，如果之后 Obsidian 被系统关闭，可能没被记住（键盘和手指点选都会），现在上屏后立即保存",
+      "插件更新词库后能立即生效，不再被旧缓存挡住（为完整词库做准备）"
+    ]
+  },
+  {
     version: "0.7.22",
     items: [
       "修复社区插件目录自动审核报的错误（兼容更早版本的 Obsidian），功能与 0.7.21 相同"

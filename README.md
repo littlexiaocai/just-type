@@ -1,9 +1,16 @@
 # Just Type · 就打个字
 
-## 最近更新 · What's new（0.7.22）
+## 最近更新 · What's new（0.7.23）
+
+- **选过的词会被更可靠地记住**：以前最后一次上屏的词，如果之后 Obsidian 被系统关闭，可能没被记住（键盘和手指点选都会），现在上屏后立即保存
+- **词库更新立即生效**：插件更新词库后不再被旧缓存挡住（为完整词库做准备）
+
+- **Learning is saved reliably**: the last word you picked could be forgotten if Obsidian was closed by the system right after (both keyboard and tap selection); it is now saved as soon as it's committed
+- **Dictionary updates take effect immediately**: an old cache no longer shadows updated dictionaries (groundwork for the full dictionary)
+
+### 0.7.22
 
 - 修复社区插件目录自动审核报的错误（兼容更早版本的 Obsidian），功能与 0.7.21 相同
-- Fixes the error reported by the community directory's automated review (compatibility with older Obsidian versions); features are the same as 0.7.21
 
 ### 0.7.21
 

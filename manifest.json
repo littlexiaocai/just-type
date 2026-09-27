@@ -1,7 +1,7 @@
 {
   "id": "just-type",
   "name": "Just Type IME",
-  "version": "0.7.22",
+  "version": "0.7.23",
   "minAppVersion": "1.5.0",
   "description": "Type Chinese directly in the editor with the RIME engine, bypassing the system input method.",
   "author": "littlexiaocai",

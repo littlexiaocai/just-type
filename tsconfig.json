@@ -3,11 +3,17 @@
     "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["DOM", "ES2020"],
+    "lib": [
+      "DOM",
+      "ES2020"
+    ],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

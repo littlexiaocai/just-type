@@ -2,12 +2,12 @@ import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, S
 import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
-import { assetSummary, loadLocalAssets, type LocalAssets } from "./assets";
+import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
 import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
-const PLUGIN_VERSION = "0.7.22";
+const PLUGIN_VERSION = "0.7.23";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";
@@ -142,15 +142,53 @@ self.addEventListener("unhandledrejection", function (e) { console.error("[Just 
 `;
 }
 
-/** My RIME worker 里 pinyin_simp 的依赖表是 bi=["stroke"]。产品不用笔画反查，改成空数组。必须只命中一次。 */
-const WORKER_STROKE_DEP = "bi=[\"stroke\"]";
+/* 上屏后把挂起的学习写进词典，再存盘。
+ *
+ * librime 每次上屏后，把这次的学习放在一个挂起的事务里（好让用户立刻按退格时撤销），要等下一次
+ * 上屏或收到一个引擎不处理的键才真正写入。插件在没有输入时不把退格交给引擎，这个撤销用不上；
+ * 反倒是「最后一次上屏」的学习，在 Obsidian 被系统结束时会丢（0.7.22 及以前键盘、点选都会丢）。
+ * 所以上屏后立即补发一个引擎不处理的 {F24}，让事务写入，再 syncfs 存盘。只在上屏后已无输入时发，
+ * 不打扰还在组字的状态。 */
+const FLUSH_LEARNING = 'e.state===0&&Module.ccall("process","string",["string"],["{F24}"]),await y("write")';
+
+/* 对上游 Worker 的全部改动。每处必须恰好命中一次：命中不到说明上游变了，启动时直接报错，绝不悄悄失效。 */
+const WORKER_PATCHES: { name: string; from: string; to: string }[] = [
+  {
+    // pinyin_simp 的依赖表是 bi=["stroke"]。产品不用笔画反查，stroke 会拖进 luna_pinyin，体积翻倍。
+    name: "去掉笔画依赖",
+    from: 'bi=["stroke"]',
+    to: "bi=[]"
+  },
+  {
+    // 上游按「文件名＋源码里写死的 md5」把方案和词库缓存进 IndexedDB「ime」，命中就不再读插件提供的
+    // 文件：插件更新了词库，老用户照样用旧缓存。改成每次都走解析器取插件给的文件。
+    name: "绕过上游方案／词库缓存",
+    from: "await ta.get(a,o,ca(c,a))",
+    to: 'await fetch(ca(c,a)).then(r=>{if(!r.ok)throw new Error("Fail to download "+a);return r.arrayBuffer()})'
+  },
+  {
+    name: "键盘上屏后写入学习并存盘",
+    from: 'async process(n){const e=JSON.parse(Module.ccall("process","string",["string"],[n]));return"committed"in e&&await y("write"),e}',
+    to: `async process(n){const e=JSON.parse(Module.ccall("process","string",["string"],[n]));return"committed"in e&&(${FLUSH_LEARNING}),e}`
+  },
+  {
+    // 手指点选原来连存盘都不做。
+    name: "点选上屏后写入学习并存盘",
+    from: 'selectCandidateOnCurrentPage(n){return Module.ccall("select_candidate_on_current_page","string",["number"],[n])}',
+    to: `async selectCandidateOnCurrentPage(n){const r=Module.ccall("select_candidate_on_current_page","string",["number"],[n]),e=JSON.parse(r);return"committed"in e&&(${FLUSH_LEARNING}),r}`
+  }
+];
 
 function patchWorkerSource(source: string): string {
-  const hits = source.split(WORKER_STROKE_DEP).length - 1;
-  if (hits !== 1) {
-    throw new Error(`Just Type：worker 依赖表补丁应命中 1 次，实际 ${hits}。上游 worker 可能已变化。`);
+  let patched = source;
+  for (const patch of WORKER_PATCHES) {
+    const hits = patched.split(patch.from).length - 1;
+    if (hits !== 1) {
+      throw new Error(`Just Type：worker 补丁「${patch.name}」应命中 1 次，实际 ${hits}。上游 worker 可能已变化。`);
+    }
+    patched = patched.replace(patch.from, patch.to);
   }
-  return source.replace(WORKER_STROKE_DEP, "bi=[]");
+  return patched;
 }
 
 /**
@@ -564,6 +602,8 @@ export default class JustTypePlugin extends Plugin {
   private panelPressAt = -Infinity;
   private activeSink?: InputSink;
   private updates?: UpdateChecker;
+  /* 引擎实际加载的词库（不是用户选的档位或下载目标）。引擎就绪后才有值。 */
+  private loadedDict?: DictIdentity;
   /* 这次启动已经提醒过的版本：同一次打开里不重复弹。 */
   private remindedVersion?: string;
   private upgradedFrom?: string;
@@ -641,6 +681,7 @@ export default class JustTypePlugin extends Plugin {
       await timeout(this.client.call<void>("setPageSize", 7), 10000, "设置候选页大小");
       this.log("setPageSize(7) 完成");
 
+      this.loadedDict = embeddedDictIdentity();
       this.ready = true;
       this.updateStatus();
       this.log(`就绪，总耗时 ${Date.now() - this.startedAt}ms`);
@@ -848,8 +889,13 @@ export default class JustTypePlugin extends Plugin {
       `插件版本：${PLUGIN_VERSION}`,
       this.environmentLine(),
       "",
-      "--- 内嵌资源（运行时不联网）---",
+      "--- 内嵌资源（引擎与基础词库，运行时不下载）---",
       assetSummary(),
+      "",
+      "--- 词库（当前实际加载）---",
+      ...(this.loadedDict
+        ? [`  ${this.loadedDict.label}：${this.loadedDict.source}`, ...this.loadedDict.files.map((f) => `    ${f.name}  ${f.bytes} B  sha256 ${f.sha256}`)]
+        : ["  （引擎尚未就绪，没有加载词库）"]),
       "",
       "--- 当前状态 ---",
       `  引擎就绪 ready = ${this.ready}`,

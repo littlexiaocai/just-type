@@ -17,6 +17,7 @@ import pinyinSchemaGz from "./assets/pinyin_simp.schema.yaml.gz";
 import pinyinPrismGz from "./assets/pinyin_simp.prism.bin.gz";
 import pinyinTableGz from "./assets/pinyin_simp.table.bin.gz";
 import pinyinReverseGz from "./assets/pinyin_simp.reverse.bin.gz";
+import assetManifest from "./assets/ASSETS.json";
 
 /** 键是文件名。Worker 请求资源时按 URL 的最后一段来找。 */
 const COMPRESSED: Record<string, Uint8Array> = {
@@ -56,4 +57,22 @@ export async function loadLocalAssets(): Promise<LocalAssets> {
 export function assetSummary(): string {
   const rows = Object.entries(COMPRESSED).map(([name, gz]) => `    ${name}：${(gz.byteLength / 1024).toFixed(0)} KB（已压缩）`);
   return [`    rime.js：${(rimeScript.length / 1024).toFixed(0)} KB（未压缩）`, ...rows].join("\n");
+}
+
+/** 内置基础词库的身份：来源版本和每个文件解压后的完整 sha256（构建期由 fetch-assets 记录）。 */
+export interface DictIdentity {
+  label: string;
+  source: string;
+  files: { name: string; bytes: number; sha256: string }[];
+}
+
+export function embeddedDictIdentity(): DictIdentity {
+  const files = Object.entries(assetManifest.files as Record<string, { bytes: number; sha256: string }>)
+    .filter(([name]) => /^pinyin_simp\.(table|prism|reverse)\.bin/.test(name))
+    .map(([name, info]) => ({ name: name.replace(/\.gz$/, ""), bytes: info.bytes, sha256: info.sha256 }));
+  return {
+    label: "内置基础词库",
+    source: `rime-pinyin-simp @rime-contrib/pinyin-simp@${assetManifest.schemas["pinyin-simp"]}`,
+    files
+  };
 }
