@@ -362,8 +362,18 @@ var DEFAULT_CONFIG = {
   requestTimeoutMs: 9e4,
   lockStaleMs: 45e3,
   heartbeatMs: 1e4,
-  activationFailureLimit: 2
+  activationFailureLimit: 2,
+  offlineProbeMs: 5e3,
+  offlineProbeSlowMs: 6e4,
+  probeTimeoutMs: 1e4
 };
+var HISTORY_LIMIT = 60;
+var WEB_LOCK = "just-type-dict-task";
+function stamp(at) {
+  const d = new Date(at);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 var FetchFailure = class extends Error {
   constructor(kind, message, retryAfterMs) {
     super(message);
@@ -399,8 +409,18 @@ var DictManager = class {
     this.disposed = false;
     /** 任务运行中又收到了手动请求（继续、立即重试）：当前任务一结束就再调度一次。 */
     this.rerun = false;
+    /** 当前处在一轮之内的退避等待（不是 30 分钟冷却）：联网、回到前台时可以提前再试。 */
+    this.backingOff = false;
+    /** 另一个窗口拿着任务锁。 */
+    this.elsewhere = false;
   }
   /* ---------------- 状态 ---------------- */
+  /** 记一条下载事件：写进插件的诊断日志，也存进跨重启保留的最近事件。 */
+  record(message) {
+    this.log(message);
+    this.state.history = [...this.state.history ?? [], `${stamp(this.now())} ${message}`].slice(-HISTORY_LIMIT);
+    void this.save();
+  }
   async init() {
     try {
       const saved = await this.store.getMeta("state");
@@ -412,12 +432,13 @@ var DictManager = class {
     const act = this.state.activation;
     if (act) {
       this.state.activation = void 0;
-      this.log(`\u68C0\u6D4B\u5230\u4E0A\u6B21\u542F\u7528 ${act.id} \u672A\u5B8C\u6210\uFF0C\u8BB0\u4E3A\u4E00\u6B21\u5931\u8D25`);
+      this.record(`\u68C0\u6D4B\u5230\u4E0A\u6B21\u542F\u7528 ${act.id} \u672A\u5B8C\u6210\uFF0C\u8BB0\u4E3A\u4E00\u6B21\u5931\u8D25`);
       if (act.id === this.catalog.id) this.recordActivationFailure("\u4E0A\u6B21\u542F\u7528\u9014\u4E2D\u9000\u51FA");
     }
     this.present = await this.store.segmentIndexes(this.catalog.id);
     this.resuming = this.present.size > 0 && this.present.size < this.catalog.tarball.segments.length;
     this.phase = this.derivePhase();
+    this.record(`\u542F\u52A8\uFF1A\u9636\u6BB5 ${this.phase}\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5${this.state.nextRetryAt ? `\uFF0C\u4E0B\u6B21\u91CD\u8BD5 ${stamp(this.state.nextRetryAt)}` : ""}`);
     await this.save();
     this.emit();
   }
@@ -453,7 +474,9 @@ var DictManager = class {
       error: err && (this.phase === "waiting" || this.phase === "error") ? { kind: err.kind, message: err.message } : void 0,
       pausedReason: this.state.paused,
       activeId: this.state.activeId,
-      resuming: this.resuming
+      resuming: this.resuming,
+      elsewhere: this.elsewhere,
+      history: this.state.history ?? []
     };
   }
   onChange(listener) {
@@ -551,7 +574,7 @@ var DictManager = class {
       if (reason === "manual") {
         this.rerun = true;
         this.cancel();
-      }
+      } else if ((reason === "online" || reason === "foreground") && this.backingOff) this.wake?.();
       return;
     }
     if (this.state.paused) return;
@@ -604,7 +627,26 @@ var DictManager = class {
     this.listeners.clear();
   }
   /* ---------------- 任务锁 ---------------- */
+  /**
+   * 同一台设备同一时间只有一个下载任务。优先用 Web Locks：持有者（窗口、进程）一结束锁就自动释放，
+   * iPad 上划掉 Obsidian 再打开能立刻接着下。没有这个接口时退回 IndexedDB 租约＋心跳，过期后接管。
+   */
   async acquireLock() {
+    const locks = navigator.locks;
+    if (locks && typeof locks.request === "function") {
+      const release = await new Promise((resolve) => {
+        locks.request(WEB_LOCK, { ifAvailable: true }, (lock2) => {
+          if (!lock2) {
+            resolve(null);
+            return void 0;
+          }
+          return new Promise((done) => resolve(done));
+        }).catch(() => resolve(null));
+      });
+      if (!release) return false;
+      this.releaseWebLock = release;
+      return true;
+    }
     const now = this.now();
     const lock = await this.store.updateMeta("lock", (old) => {
       if (!old || old.owner === this.owner || now - old.at > this.config.lockStaleMs) return { owner: this.owner, at: now };
@@ -614,6 +656,7 @@ var DictManager = class {
   }
   startHeartbeat() {
     this.stopHeartbeat();
+    if (this.releaseWebLock) return;
     this.heartbeat = window.setInterval(() => {
       void this.store.updateMeta("lock", (old) => old?.owner === this.owner ? { owner: this.owner, at: this.now() } : old).catch(() => void 0);
     }, this.config.heartbeatMs);
@@ -625,6 +668,11 @@ var DictManager = class {
     }
   }
   async releaseLock() {
+    if (this.releaseWebLock) {
+      this.releaseWebLock();
+      this.releaseWebLock = void 0;
+      return;
+    }
     try {
       await this.store.updateMeta("lock", (old) => old?.owner === this.owner ? void 0 : old);
     } catch {
@@ -636,20 +684,25 @@ var DictManager = class {
     this.running = true;
     try {
       if (!await this.acquireLock()) {
-        this.log("\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u8FD9\u91CC\u4E0D\u91CD\u590D\u4E0B\u8F7D");
+        if (!this.elsewhere) this.record("\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u8FD9\u91CC\u4E0D\u91CD\u590D\u4E0B\u8F7D");
+        this.elsewhere = true;
+        this.emit();
         this.armTimer(this.config.lockStaleMs);
         return;
       }
+      if (this.elsewhere) {
+        this.elsewhere = false;
+        this.emit();
+      }
       this.startHeartbeat();
       this.present = await this.store.segmentIndexes(this.catalog.id);
-      this.log(`\u5B8C\u6574\u8BCD\u5E93\u4EFB\u52A1\u5F00\u59CB\uFF08${reason}\uFF09\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5`);
+      this.record(`\u5B8C\u6574\u8BCD\u5E93\u4EFB\u52A1\u5F00\u59CB\uFF08${reason}\uFF09\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5`);
       while (gen === this.generation) {
         const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
         if (missing.length) {
-          if (!navigator.onLine && reason !== "timer") {
-            this.setWaiting({ kind: "offline", message: "\u8BBE\u5907\u79BB\u7EBF\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED" }, void 0);
-            this.armTimer(5 * 6e4);
-            return;
+          if (!navigator.onLine && !await this.reachable()) {
+            if (!await this.waitOnline(gen)) return;
+            continue;
           }
           this.phase = "downloading";
           this.emit();
@@ -671,7 +724,7 @@ var DictManager = class {
           this.state.lastError = void 0;
           this.phase = "ready";
           await this.save();
-          this.log("\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5E76\u6821\u9A8C\u5B8C\u6210\uFF0C\u7B49\u5F85\u542F\u7528");
+          this.record("\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5E76\u6821\u9A8C\u5B8C\u6210\uFF0C\u7B49\u5F85\u542F\u7528");
           this.emit();
           return;
         }
@@ -693,10 +746,10 @@ var DictManager = class {
     const start = index * seg;
     return [start, Math.min(start + seg, this.catalog.tarball.bytes) - 1];
   }
-  async withTimeout(promise) {
+  async withTimeout(promise, ms = this.config.requestTimeoutMs) {
     let timer;
     const timeout2 = new Promise((_, reject) => {
-      timer = window.setTimeout(() => reject(new FetchFailure("timeout", "\u4E0B\u8F7D\u8D85\u65F6")), this.config.requestTimeoutMs);
+      timer = window.setTimeout(() => reject(new FetchFailure("timeout", "\u4E0B\u8F7D\u8D85\u65F6")), ms);
     });
     try {
       return await Promise.race([promise, timeout2]);
@@ -752,7 +805,10 @@ var DictManager = class {
   /** 返回 true 表示本轮还能继续（已按退避等待过）；false 表示本轮结束。 */
   async handleFailure(error, gen) {
     const failure = error instanceof FetchFailure ? error : new FetchFailure("network", String(error));
-    this.log(`\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5931\u8D25\uFF1A${failure.kind} ${failure.message}`);
+    this.record(`\u4E0B\u8F7D\u5931\u8D25\uFF1A${failure.kind} ${failure.message}\uFF08navigator.onLine=${String(navigator.onLine)}\uFF09`);
+    if ((failure.kind === "network" || failure.kind === "timeout") && !await this.reachable()) {
+      return await this.waitOnline(gen);
+    }
     if (failure.kind === "storage") {
       this.state.lastError = { kind: "storage", message: "\u5B58\u50A8\u7A7A\u95F4\u4E0D\u8DB3\u6216\u65E0\u6CD5\u5199\u5165\uFF0C\u91CA\u653E\u7A7A\u95F4\u540E\u5728\u8BBE\u7F6E\u91CC\u70B9\u300C\u7ACB\u5373\u91CD\u8BD5\u300D", at: this.now() };
       this.phase = "error";
@@ -768,6 +824,7 @@ var DictManager = class {
     if (attempts > this.config.retryDelaysMs.length) {
       const cooldown = Math.max(this.config.cooldownMs, failure.retryAfterMs ?? 0);
       this.state.attempts = 0;
+      this.record(`\u8FD9\u4E00\u8F6E\u91CD\u8BD5\u7528\u5B8C\uFF0C\u51B7\u5374\u5230 ${stamp(this.now() + cooldown)}`);
       this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + cooldown);
       return false;
     }
@@ -775,8 +832,48 @@ var DictManager = class {
     const jittered = base * (1 + (Math.random() * 2 - 1) * this.config.jitter);
     const delay = Math.max(jittered, failure.retryAfterMs ?? 0);
     this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + delay);
-    await this.sleep(delay);
+    this.backingOff = true;
+    try {
+      await this.sleep(delay);
+    } finally {
+      this.backingOff = false;
+    }
     return gen === this.generation;
+  }
+  /** 任一下载源能给出 HTTP 响应（任何状态码都算）就说明网络是通的。试探只取 1 字节。 */
+  async reachable() {
+    for (const url of this.catalog.urls) {
+      try {
+        const res = await this.withTimeout(this.fetcher(url, 0, 0), this.config.probeTimeoutMs);
+        if (res.status > 0) return true;
+      } catch {
+      }
+    }
+    return false;
+  }
+  /**
+   * 等到网络恢复：状态是「等待联网」，不消耗重试次数。每隔几秒试探一次（离线超过 10 分钟后放慢），
+   * 联网、回到前台时立刻再探。探通了返回 true，由下载循环马上接着下；任务被取消返回 false。
+   */
+  async waitOnline(gen) {
+    this.record("\u4E24\u4E2A\u4E0B\u8F7D\u6E90\u90FD\u8FDE\u4E0D\u4E0A\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF1A\u4E0D\u8BA1\u5165\u91CD\u8BD5\u6B21\u6570\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u63A5\u7740\u4E0B");
+    this.setWaiting({ kind: "offline", message: "\u8BBE\u5907\u79BB\u7EBF\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED" }, void 0);
+    const started = this.now();
+    while (gen === this.generation) {
+      const slow = this.now() - started > 10 * 6e4;
+      this.backingOff = true;
+      try {
+        await this.sleep(slow ? this.config.offlineProbeSlowMs : this.config.offlineProbeMs);
+      } finally {
+        this.backingOff = false;
+      }
+      if (gen !== this.generation) return false;
+      if (await this.reachable()) {
+        this.record(`\u7F51\u7EDC\u6062\u590D\uFF08\u7B49\u4E86 ${Math.round((this.now() - started) / 1e3)} \u79D2\uFF09\uFF0C\u63A5\u7740\u4E0B\u8F7D`);
+        return gen === this.generation;
+      }
+    }
+    return false;
   }
   setWaiting(error, nextRetryAt) {
     this.state.lastError = { ...error, at: this.now() };
@@ -808,7 +905,7 @@ var DictManager = class {
         this.present.delete(i);
       }
       this.state.activeId = void 0;
-      this.log(`\u5B8C\u6574\u8BCD\u5E93\u6709 ${bad.length} \u6BB5\u7F3A\u5931\u6216\u635F\u574F\uFF0C\u5DF2\u4E22\u5F03\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B`);
+      this.record(`\u5B8C\u6574\u8BCD\u5E93\u6709 ${bad.length} \u6BB5\u7F3A\u5931\u6216\u635F\u574F\uFF0C\u5DF2\u4E22\u5F03\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B`);
       this.phase = this.derivePhase();
       await this.save();
       this.emit();
@@ -838,7 +935,7 @@ var DictManager = class {
     this.state.lastError = { kind, message: reason, at: this.now() };
     this.state.activeId = void 0;
     this.phase = "error";
-    this.log(`\u5B8C\u6574\u8BCD\u5E93 ${this.catalog.id} \u5DF2\u9694\u79BB\uFF1A${reason}`);
+    this.record(`\u5B8C\u6574\u8BCD\u5E93 ${this.catalog.id} \u5DF2\u9694\u79BB\uFF1A${reason}`);
   }
   /* ---------------- 启用记录 ---------------- */
   /** 插件开始用完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
@@ -1032,6 +1129,9 @@ function describeDict(status, ctx) {
   }
   if (ctx.switching === "base") {
     return { chip: "\u6B63\u5728\u5207\u56DE\u57FA\u7840\u8BCD\u5E93\u2026", detail: "\u6B63\u5728\u5207\u56DE\u57FA\u7840\u8BCD\u5E93\u3002\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002", attention: false };
+  }
+  if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
+    return { chip: "\u5B8C\u6574\u8BCD\u5E93 \u53E6\u4E00\u7A97\u53E3\u4E0B\u8F7D\u4E2D", detail: "\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u8FD9\u91CC\u7B49\u5B83\u4E0B\u5B8C\u76F4\u63A5\u4F7F\u7528\uFF0C\u4E0D\u91CD\u590D\u4E0B\u8F7D\u3002", attention: false };
   }
   switch (status.phase) {
     case "active":
@@ -1672,6 +1772,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "0.7.24";
+var BUILD_TIME = true ? "2026/9/27 22:03:33" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2278,10 +2379,10 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     try {
       const files = await dict.extractInstalled();
       if (!files) {
-        this.log("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7\uFF0C\u8FD9\u6B21\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B");
+        this.dictLog("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7\uFF0C\u8FD9\u6B21\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B");
         return void 0;
       }
-      this.log(`\u5B8C\u6574\u8BCD\u5E93\u53D6\u51FA\u5E76\u6821\u9A8C\u5B8C\u6210\uFF08${Date.now() - t0}ms\uFF09`);
+      this.dictLog(`\u5B8C\u6574\u8BCD\u5E93\u53D6\u51FA\u5E76\u6821\u9A8C\u5B8C\u6210\uFF08${Date.now() - t0}ms\uFF09`);
       const assets = await this.fullAssets(files);
       await dict.beginActivation();
       try {
@@ -2289,6 +2390,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
         await dict.endActivation(true);
         this.engineDict = "full";
         this.loadedDict = fullDictIdentity(dict.catalog);
+        this.dictLog(`\u542F\u52A8\u5373\u7528\u5B8C\u6574\u8BCD\u5E93\uFF08\u53D6\u51FA\u6821\u9A8C\uFF0B\u52A0\u8F7D\u5171 ${Date.now() - t0}ms\uFF09`);
         this.noticeOnce("activated", "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528");
         return client;
       } catch (error) {
@@ -2297,7 +2399,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
         throw error;
       }
     } catch (error) {
-      this.log(`\u5B8C\u6574\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6539\u7528\u57FA\u7840\u8BCD\u5E93\uFF1A${this.errorMessage(error)}`);
+      this.dictLog(`\u5B8C\u6574\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6539\u7528\u57FA\u7840\u8BCD\u5E93\uFF1A${this.errorMessage(error)}`);
       return void 0;
     }
   }
@@ -2327,6 +2429,11 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       this.noticeOnce(`error-${status.error.kind}`, describeDict(status, this.dictContext()).detail, 12e3);
     }
     this.syncEngine();
+  }
+  /** 与词库切换有关的日志：同时记进跨重启保留的下载事件。 */
+  dictLog(message) {
+    if (this.dict) this.dict.record(message);
+    else this.log(message);
   }
   /** 一次性提示：同一个词库版本只提示一次，跨重启记住。 */
   noticeOnce(key, text, duration = 8e3) {
@@ -2400,7 +2507,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
         assets = await loadLocalAssets();
       }
     } catch (error) {
-      this.log(`\u51C6\u5907\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${this.errorMessage(error)}`);
+      this.dictLog(`\u51C6\u5907\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${this.errorMessage(error)}`);
       this.switching = void 0;
       this.refreshDict();
       return;
@@ -2425,10 +2532,10 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
         await dict.endActivation(true);
         this.noticeOnce("activated", "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528");
       }
-      this.log(`\u5DF2\u5207\u6362\u5230${label}\uFF08\u51C6\u5907\uFF0B\u5207\u6362\u5171 ${Date.now() - t0}ms\uFF09`);
+      this.dictLog(`\u5DF2\u5207\u6362\u5230${label}\uFF08\u51C6\u5907\uFF0B\u5207\u6362\u5171 ${Date.now() - t0}ms\uFF09`);
     } catch (error) {
       const message = this.errorMessage(error);
-      this.log(`\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${message}`);
+      this.dictLog(`\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${message}`);
       if (target === "full") {
         this.activationFailedThisRun = true;
         await dict.endActivation(false, message);
@@ -2491,9 +2598,9 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       };
       await walk("/rime");
       await store.putBackup(key, { at: Date.now(), plugin: PLUGIN_VERSION, files });
-      this.log(`\u5B66\u4E60\u8BB0\u5F55\u5DF2\u5907\u4EFD\uFF1A${Object.keys(files).length} \u4E2A\u6587\u4EF6\uFF0C${bytes} B`);
+      this.dictLog(`\u5B66\u4E60\u8BB0\u5F55\u5DF2\u5907\u4EFD\uFF1A${Object.keys(files).length} \u4E2A\u6587\u4EF6\uFF0C${bytes} B`);
     } catch (error) {
-      this.log(`\u5B66\u4E60\u8BB0\u5F55\u5907\u4EFD\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5207\u6362\uFF09\uFF1A${this.errorMessage(error)}`);
+      this.dictLog(`\u5B66\u4E60\u8BB0\u5F55\u5907\u4EFD\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5207\u6362\uFF09\uFF1A${this.errorMessage(error)}`);
     }
   }
   /* 设置页和详情窗用的操作。 */
@@ -2539,8 +2646,8 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   }
   /* ---------------- diagnostics ---------------- */
   log(message) {
-    const stamp = String(Date.now() - this.startedAt).padStart(6, " ");
-    this.diagnostics.push(`[+${stamp}ms] ${message}`);
+    const stamp2 = String(Date.now() - this.startedAt).padStart(6, " ");
+    this.diagnostics.push(`[+${stamp2}ms] ${message}`);
   }
   environmentLine() {
     const kind = import_obsidian3.Platform.isIosApp ? "iOS/iPadOS App" : import_obsidian3.Platform.isAndroidApp ? "Android App" : import_obsidian3.Platform.isMacOS ? "macOS \u684C\u9762" : import_obsidian3.Platform.isWin ? "Windows \u684C\u9762" : "\u5176\u5B83";
@@ -2645,8 +2752,8 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   trace(kind, detail) {
     if (!this.traceEnabled) return -1;
     this.eventCounts[kind] = (this.eventCounts[kind] ?? 0) + 1;
-    const stamp = String(Date.now() - this.startedAt).padStart(6, " ");
-    this.eventTrace.push(`[+${stamp}ms] ${kind} ${detail}`);
+    const stamp2 = String(Date.now() - this.startedAt).padStart(6, " ");
+    this.eventTrace.push(`[+${stamp2}ms] ${kind} ${detail}`);
     if (this.eventTrace.length > MAX_TRACE) this.eventTrace.shift();
     return this.eventTrace.length - 1;
   }
@@ -2659,8 +2766,8 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   async saveReport() {
     const d = /* @__PURE__ */ new Date();
     const pad = (n) => String(n).padStart(2, "0");
-    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const path = `${REPORT_FOLDER}/${stamp}.md`;
+    const stamp2 = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    const path = `${REPORT_FOLDER}/${stamp2}.md`;
     try {
       if (!this.app.vault.getAbstractFileByPath(REPORT_FOLDER)) {
         await this.app.vault.createFolder(REPORT_FOLDER);
@@ -2680,7 +2787,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     return [
       "Just Type \xB7 \u8BCA\u65AD\u62A5\u544A",
       `\u751F\u6210\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toLocaleString()}`,
-      `\u63D2\u4EF6\u7248\u672C\uFF1A${PLUGIN_VERSION}`,
+      `\u63D2\u4EF6\u7248\u672C\uFF1A${PLUGIN_VERSION}\uFF08\u6784\u5EFA\u4E8E ${BUILD_TIME}\uFF09`,
       this.environmentLine(),
       "",
       "--- \u5185\u5D4C\u8D44\u6E90\uFF08\u5F15\u64CE\u4E0E\u57FA\u7840\u8BCD\u5E93\uFF0C\u8FD0\u884C\u65F6\u4E0D\u4E0B\u8F7D\uFF09---",
@@ -2728,7 +2835,10 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       `  \u9636\u6BB5 ${s.phase}\uFF5C\u5DF2\u6838\u5BF9 ${s.segmentsDone}/${s.segmentsTotal} \u6BB5\uFF08${s.bytesDone}/${s.bytesTotal} B\uFF09\uFF5C\u63A5\u7740\u4E0B ${s.resuming}`,
       `  \u6682\u505C\u610F\u56FE ${s.pausedReason ?? "\u65E0"}\uFF5C\u4E0B\u6B21\u81EA\u52A8\u91CD\u8BD5 ${time(s.nextRetryAt)}`,
       `  \u6700\u8FD1\u9519\u8BEF ${s.error ? `${s.error.kind}\uFF1A${s.error.message}` : "\u65E0"}`,
-      `  \u5F15\u64CE\u5728\u7528 ${this.engineDict}\uFF5C\u5207\u6362\u4E2D ${this.switching ?? "\u5426"}\uFF5C\u8FD9\u6B21\u542F\u7528\u5931\u8D25\u8FC7 ${this.activationFailedThisRun}\uFF5C\u8BB0\u5F55\u7684\u542F\u7528\u7248\u672C ${s.activeId ?? "\u65E0"}`
+      `  \u5F15\u64CE\u5728\u7528 ${this.engineDict}\uFF5C\u5207\u6362\u4E2D ${this.switching ?? "\u5426"}\uFF5C\u8FD9\u6B21\u542F\u7528\u5931\u8D25\u8FC7 ${this.activationFailedThisRun}\uFF5C\u8BB0\u5F55\u7684\u542F\u7528\u7248\u672C ${s.activeId ?? "\u65E0"}\uFF5C\u53E6\u4E00\u7A97\u53E3\u5728\u4E0B ${s.elsewhere}`,
+      `  \u8BBE\u5907\u5728\u7EBF navigator.onLine = ${String(navigator.onLine)}`,
+      `  \u6700\u8FD1\u4E0B\u8F7D\u4E8B\u4EF6\uFF08\u8DE8\u91CD\u542F\u4FDD\u7559\uFF0C\u6700\u591A 60 \u6761\uFF09\uFF1A`,
+      ...s.history.length ? s.history.map((line) => `    ${line}`) : ["    \uFF08\u65E0\uFF09"]
     ];
   }
   /* ---------------- 新版本与更新说明 ---------------- */

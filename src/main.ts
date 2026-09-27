@@ -11,6 +11,8 @@ import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
 const PLUGIN_VERSION = "0.7.24";
+declare const JT_BUILD_TIME: string;
+const BUILD_TIME = typeof JT_BUILD_TIME !== "undefined" ? JT_BUILD_TIME : "未知";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";
@@ -1283,7 +1285,7 @@ export default class JustTypePlugin extends Plugin {
     return [
       "Just Type · 诊断报告",
       `生成时间：${new Date().toLocaleString()}`,
-      `插件版本：${PLUGIN_VERSION}`,
+      `插件版本：${PLUGIN_VERSION}（构建于 ${BUILD_TIME}）`,
       this.environmentLine(),
       "",
       "--- 内嵌资源（引擎与基础词库，运行时不下载）---",
