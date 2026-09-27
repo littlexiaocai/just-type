@@ -512,22 +512,27 @@ var UpdateChecker = class {
     this.state = this.load();
   }
   /* ---------- 本机存储 ---------- */
+  /* 直接用 localStorage，不用 app.loadLocalStorage（1.8.7 才有，插件声明兼容 1.5.0）。
+     键名与 Obsidian 自己的 loadLocalStorage 相同（appId + "-" + 键），0.7.21 存下的记录照样读得到。
+     localStorage 不随 Obsidian Sync 同步，所以每台设备各提醒各的。 */
+  storageKey() {
+    const appId = this.app.appId;
+    return typeof appId === "string" && appId ? `${appId}-${STORE_KEY}` : `${STORE_KEY}:${this.app.vault.getName()}`;
+  }
   load() {
     try {
-      const app = this.app;
-      const raw = typeof app.loadLocalStorage === "function" ? app.loadLocalStorage(STORE_KEY) : window.localStorage.getItem(`${STORE_KEY}:${this.app.vault.getName()}`);
+      const raw = window.localStorage.getItem(this.storageKey());
       if (!raw) return {};
-      return typeof raw === "string" ? JSON.parse(raw) : raw;
+      let value = JSON.parse(raw);
+      if (typeof value === "string") value = JSON.parse(value);
+      return value !== null && typeof value === "object" ? value : {};
     } catch {
       return {};
     }
   }
   save() {
     try {
-      const app = this.app;
-      const raw = JSON.stringify(this.state);
-      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(STORE_KEY, raw);
-      else window.localStorage.setItem(`${STORE_KEY}:${this.app.vault.getName()}`, raw);
+      window.localStorage.setItem(this.storageKey(), JSON.stringify(this.state));
     } catch {
     }
   }
@@ -591,6 +596,12 @@ var UpdateChecker = class {
 // src/release-notes.ts
 var RELEASE_NOTES = [
   {
+    version: "0.7.22",
+    items: [
+      "\u4FEE\u590D\u793E\u533A\u63D2\u4EF6\u76EE\u5F55\u81EA\u52A8\u5BA1\u6838\u62A5\u7684\u9519\u8BEF\uFF08\u517C\u5BB9\u66F4\u65E9\u7248\u672C\u7684 Obsidian\uFF09\uFF0C\u529F\u80FD\u4E0E 0.7.21 \u76F8\u540C"
+    ]
+  },
+  {
     version: "0.7.21",
     items: [
       "\u6709\u65B0\u7248\u672C\u65F6\uFF0C\u6253\u5F00 Obsidian \u4F1A\u5728\u53F3\u4E0A\u89D2\u63D0\u9192\u4F60\uFF0C\u70B9\u300C\u53BB\u66F4\u65B0\u300D\u76F4\u63A5\u8DF3\u5230\u63D2\u4EF6\u9875\uFF08\u8BBE\u7F6E\u91CC\u53EF\u5173\u95ED\uFF09",
@@ -609,7 +620,7 @@ var RELEASE_NOTES = [
 ];
 
 // src/main.ts
-var PLUGIN_VERSION = "0.7.21";
+var PLUGIN_VERSION = "0.7.22";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -888,11 +899,7 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
       name: "\u4E0D\u518D\u63D0\u9192\u5DF2\u53D1\u73B0\u7684\u65B0\u7248\u672C",
       desc: "\u53EA\u5BF9\u76EE\u524D\u53D1\u73B0\u7684\u8FD9\u4E2A\u7248\u672C\u751F\u6548\uFF1B\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002",
       aliases: ["ignore", "update", "\u4E0D\u518D\u63D0\u9192"],
-      visible: () => this.plugin.hasPendingUpdate(),
-      action: () => {
-        this.plugin.ignorePendingUpdate();
-        this.refreshDomState();
-      }
+      action: () => this.plugin.ignorePendingUpdate()
     }, {
       name: "\u67E5\u770B\u6700\u8FD1\u66F4\u65B0",
       desc: "\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002",
@@ -1305,23 +1312,23 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       return;
     }
     const message = createFragment((f) => {
-      f.createDiv({ cls: "just-type-update-title", text: `Just Type \u5DF2\u66F4\u65B0\u5230 ${PLUGIN_VERSION}\uFF0C\u5DF2\u5C31\u7EEA` });
-      f.createDiv({ cls: "just-type-update-link", text: "\u70B9\u8FD9\u91CC\u770B\u66F4\u65B0\u4E86\u4EC0\u4E48" });
+      const box = f.createDiv();
+      box.createDiv({ cls: "just-type-update-title", text: `Just Type \u5DF2\u66F4\u65B0\u5230 ${PLUGIN_VERSION}\uFF0C\u5DF2\u5C31\u7EEA` });
+      box.createDiv({ cls: "just-type-update-link", text: "\u70B9\u8FD9\u91CC\u770B\u66F4\u65B0\u4E86\u4EC0\u4E48" });
+      box.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} \u66F4\u65B0\u4E86\u4EC0\u4E48`).open());
     });
-    const notice = new import_obsidian2.Notice(message, 12e3);
-    notice.messageEl?.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} \u66F4\u65B0\u4E86\u4EC0\u4E48`).open());
+    new import_obsidian2.Notice(message, 12e3);
   }
   openWhatsNew() {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
     new WhatsNewModal(this.app, notes, "Just Type \u6700\u8FD1\u66F4\u65B0").open();
   }
-  hasPendingUpdate() {
-    const info = this.updates?.newer();
-    return Boolean(info && !this.updates.isIgnored(info.version));
-  }
   ignorePendingUpdate() {
     const info = this.updates?.newer();
-    if (!info) return;
+    if (!info || this.updates.isIgnored(info.version)) {
+      new import_obsidian2.Notice(`\u76EE\u524D\u6CA1\u6709\u5F85\u63D0\u9192\u7684\u65B0\u7248\u672C\uFF08\u5F53\u524D ${PLUGIN_VERSION}\uFF09\u3002`, 5e3);
+      return;
+    }
     this.updates.ignore(info.version);
     new import_obsidian2.Notice(`\u4E0D\u518D\u63D0\u9192 ${info.version}\u3002\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002`, 6e3);
   }
@@ -1612,7 +1619,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
   onKeydown(event) {
     this.toggleArmed = this.isToggleKeyAlone(event);
     this.keydownSeen += 1;
-    const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : String(event.target);
+    const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : event.target === null ? "null" : event.target.constructor.name;
     this.lastKeyNote = `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} keyCode=${this.redactKeyCode(event.keyCode)} isComposing=${event.isComposing} target=[${target}]`;
     this.pendingTrace = this.trace("keydown", `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} kc=${this.redactKeyCode(event.keyCode)} comp=${event.isComposing} @${this.targetTag(event.target)}`);
     this.noteImeReleased(event);

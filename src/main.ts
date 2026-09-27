@@ -7,7 +7,7 @@ import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
-const PLUGIN_VERSION = "0.7.21";
+const PLUGIN_VERSION = "0.7.22";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";
@@ -408,11 +408,7 @@ class JustTypeSettingTab extends PluginSettingTab {
       name: "不再提醒已发现的新版本",
       desc: "只对目前发现的这个版本生效；以后出了更新的版本还会提醒。",
       aliases: ["ignore", "update", "不再提醒"],
-      visible: () => this.plugin.hasPendingUpdate(),
-      action: () => {
-        this.plugin.ignorePendingUpdate();
-        this.refreshDomState();
-      }
+      action: () => this.plugin.ignorePendingUpdate()
     }, {
       name: "查看最近更新",
       desc: "看看最近几个版本改了什么。",
@@ -915,12 +911,14 @@ export default class JustTypePlugin extends Plugin {
       new Notice(this.readyHint());
       return;
     }
+    // 点击监听挂在自己建的元素上，不用 Notice.messageEl（1.8.7 才有）。
     const message = createFragment((f) => {
-      f.createDiv({ cls: "just-type-update-title", text: `Just Type 已更新到 ${PLUGIN_VERSION}，已就绪` });
-      f.createDiv({ cls: "just-type-update-link", text: "点这里看更新了什么" });
+      const box = f.createDiv();
+      box.createDiv({ cls: "just-type-update-title", text: `Just Type 已更新到 ${PLUGIN_VERSION}，已就绪` });
+      box.createDiv({ cls: "just-type-update-link", text: "点这里看更新了什么" });
+      box.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} 更新了什么`).open());
     });
-    const notice = new Notice(message, 12000);
-    notice.messageEl?.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} 更新了什么`).open());
+    new Notice(message, 12000);
   }
 
   openWhatsNew(): void {
@@ -928,14 +926,12 @@ export default class JustTypePlugin extends Plugin {
     new WhatsNewModal(this.app, notes, "Just Type 最近更新").open();
   }
 
-  hasPendingUpdate(): boolean {
-    const info = this.updates?.newer();
-    return Boolean(info && !this.updates!.isIgnored(info.version));
-  }
-
   ignorePendingUpdate(): void {
     const info = this.updates?.newer();
-    if (!info) return;
+    if (!info || this.updates!.isIgnored(info.version)) {
+      new Notice(`目前没有待提醒的新版本（当前 ${PLUGIN_VERSION}）。`, 5000);
+      return;
+    }
     this.updates!.ignore(info.version);
     new Notice(`不再提醒 ${info.version}。以后出了更新的版本还会提醒。`, 6000);
   }
@@ -1266,7 +1262,7 @@ export default class JustTypePlugin extends Plugin {
   private onKeydown(event: KeyboardEvent): void {
     this.toggleArmed = this.isToggleKeyAlone(event);
     this.keydownSeen += 1;
-    const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : String(event.target);
+    const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : (event.target === null ? "null" : event.target.constructor.name);
     this.lastKeyNote = `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} keyCode=${this.redactKeyCode(event.keyCode)} isComposing=${event.isComposing} target=[${target}]`;
     this.pendingTrace = this.trace("keydown", `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} kc=${this.redactKeyCode(event.keyCode)} comp=${event.isComposing} @${this.targetTag(event.target)}`);
 

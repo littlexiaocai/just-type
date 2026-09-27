@@ -1,6 +1,11 @@
 # Just Type · 就打个字
 
-## 最近更新 · What's new（0.7.21）
+## 最近更新 · What's new（0.7.22）
+
+- 修复社区插件目录自动审核报的错误（兼容更早版本的 Obsidian），功能与 0.7.21 相同
+- Fixes the error reported by the community directory's automated review (compatibility with older Obsidian versions); features are the same as 0.7.21
+
+### 0.7.21
 
 - **有新版本时会提醒你**：打开 Obsidian 时右上角提醒，点「去更新」直接跳到插件页（设置里可关闭，见下方「联网说明」）
 - **更新后告诉你改了什么**：升级后第一次打开，弹一次「这次更新了什么」

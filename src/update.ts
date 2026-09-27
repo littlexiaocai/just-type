@@ -8,7 +8,7 @@
  * 地址按顺序尝试：npmmirror（国内稳定）→ jsDelivr → GitHub API。都失败就保留上次已知的结果，
  * 过一小时再试；失败绝不当作「已是最新」。
  *
- * 记录存在本机（app.loadLocalStorage，不随 Obsidian Sync 同步），所以每台设备各提醒各的。
+ * 记录存在本机 localStorage（不随 Obsidian Sync 同步），所以每台设备各提醒各的。
  */
 import { requestUrl, type App } from "obsidian";
 
@@ -118,14 +118,22 @@ export class UpdateChecker {
 
   /* ---------- 本机存储 ---------- */
 
+  /* 直接用 localStorage，不用 app.loadLocalStorage（1.8.7 才有，插件声明兼容 1.5.0）。
+     键名与 Obsidian 自己的 loadLocalStorage 相同（appId + "-" + 键），0.7.21 存下的记录照样读得到。
+     localStorage 不随 Obsidian Sync 同步，所以每台设备各提醒各的。 */
+  private storageKey(): string {
+    const appId = (this.app as unknown as { appId?: unknown }).appId;
+    return typeof appId === "string" && appId ? `${appId}-${STORE_KEY}` : `${STORE_KEY}:${this.app.vault.getName()}`;
+  }
+
   private load(): UpdateState {
     try {
-      const app = this.app as App & { loadLocalStorage?: (key: string) => unknown };
-      const raw = typeof app.loadLocalStorage === "function"
-        ? app.loadLocalStorage(STORE_KEY)
-        : window.localStorage.getItem(`${STORE_KEY}:${this.app.vault.getName()}`);
+      const raw = window.localStorage.getItem(this.storageKey());
       if (!raw) return {};
-      return (typeof raw === "string" ? JSON.parse(raw) : raw) as UpdateState;
+      let value = JSON.parse(raw) as unknown;
+      // 0.7.21 经 saveLocalStorage 存的是「JSON 字符串再套一层 JSON」，多解一次。
+      if (typeof value === "string") value = JSON.parse(value) as unknown;
+      return value !== null && typeof value === "object" ? value : {};
     } catch {
       return {};
     }
@@ -133,10 +141,7 @@ export class UpdateChecker {
 
   private save(): void {
     try {
-      const app = this.app as App & { saveLocalStorage?: (key: string, data: unknown) => void };
-      const raw = JSON.stringify(this.state);
-      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(STORE_KEY, raw);
-      else window.localStorage.setItem(`${STORE_KEY}:${this.app.vault.getName()}`, raw);
+      window.localStorage.setItem(this.storageKey(), JSON.stringify(this.state));
     } catch {
       // 存不下也不影响输入，下次启动再查一次而已。
     }

@@ -9,6 +9,12 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.7.22",
+    items: [
+      "修复社区插件目录自动审核报的错误（兼容更早版本的 Obsidian），功能与 0.7.21 相同"
+    ]
+  },
+  {
     version: "0.7.21",
     items: [
       "有新版本时，打开 Obsidian 会在右上角提醒你，点「去更新」直接跳到插件页（设置里可关闭）",
