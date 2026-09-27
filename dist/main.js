@@ -38,7 +38,7 @@ __export(main_exports, {
   default: () => JustTypePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/inline-preedit.ts
 var import_state = require("@codemirror/state");
@@ -181,9 +181,11 @@ async function gunzip(data) {
   const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"));
   return await new Response(stream).arrayBuffer();
 }
-async function loadLocalAssets() {
+var DICT_FILES = /* @__PURE__ */ new Set(["pinyin_simp.table.bin", "pinyin_simp.prism.bin", "pinyin_simp.reverse.bin"]);
+async function loadLocalAssets(skipDict = false) {
   const binaries = {};
   for (const [name, gz] of Object.entries(COMPRESSED)) {
+    if (skipDict && DICT_FILES.has(name)) continue;
     binaries[name] = await gunzip(gz);
   }
   return { script: rime_js_default, binaries };
@@ -200,6 +202,972 @@ function embeddedDictIdentity() {
     files
   };
 }
+
+// src/dict/catalog.json
+var catalog_default = {
+  id: "just-type-dict@1.0.0",
+  name: "just-type-dict",
+  version: "1.0.0",
+  label: "\u5B8C\u6574\u8BCD\u5E93\uFF08\u96FE\u51C7\u62FC\u97F3 \u5B57\u8868\uFF0B\u57FA\u7840\uFF0B\u6269\u5145\uFF0B\u817E\u8BAF\uFF09",
+  source: "iDvel/rime-ice@9e66b0729083b37d217312294f6d516c8d7234be",
+  license: "GPL-3.0",
+  compiler: "librime 1.17.0_2",
+  tarball: {
+    filename: "just-type-dict-1.0.0.tgz",
+    bytes: 26112060,
+    sha256: "2e893a5fde94494968cc7cfec9aecc2d3f5e05a99eb93605c92c10d5844408c4",
+    integrity: "sha512-AZ+AgBU4STWAiwgRV4k1/2KRUkNf6cTO9aSnQajI/81XvKdXlujjUMdi284Rl4t89vU12tiMOt0AFkCiXkw6sQ==",
+    segmentBytes: 2097152,
+    segments: [
+      "3045aaec00c29219fede2d404aed6fda51ace5866dfbc3ade58de47c3734d27b",
+      "9fee97442fabfe60e7758f297c3c97503f9863963372c978a18352961361c89a",
+      "7a037f3efd8485cfc51fb45bef35a097694fe2a571a57c00b5a879b7c852bf09",
+      "5da27ec2f90dd78a7c7c678d7218ade682e6cb5a4ac4b1f6c517f46202424229",
+      "f4bbbc3629c96300bf7dc12a4083665e28eb8c8a95d0eed4d4948810f29760f3",
+      "82347ab2057f400779339e3fdf8f95a5f42b32dd81156879fd8eb525b3604da8",
+      "d477f694b7284b26a076fcf01dd164def208896734585fc7c0a0aa7117b5bfe7",
+      "cc93eb830272b443f47763ea912977a3a23e46f391780e5ca8c9b2c48b556a15",
+      "2dacb3d9cda35dd0b2cdadd461eff385f87117ceedff2031dd8ac583e2a80719",
+      "f509d5d1e3adbc2e81f28b3c5419daec671673b2c9fc0790152f7d3fcbd1c8e9",
+      "5227214db7b63396100c540ba1f021fc5a24b5cfc02ef78f587a7f1455a66811",
+      "51d6040be0ecd81d9c2c4f8d2c744a2dfe95330702f573f3b11f84a5844f77e5",
+      "64a402b7926e9848e1f422a5880f83f6355386209663e98788d1dd8157c001b8"
+    ]
+  },
+  urls: [
+    "https://registry.npmmirror.com/just-type-dict/-/just-type-dict-1.0.0.tgz",
+    "https://registry.npmjs.org/just-type-dict/-/just-type-dict-1.0.0.tgz"
+  ],
+  files: [
+    {
+      name: "pinyin_simp.table.bin",
+      bytes: 60628232,
+      sha256: "de1b872f7e5b0df5193994b6602597cdc706b76de4e835132bcbb848cc4fff7b"
+    },
+    {
+      name: "pinyin_simp.prism.bin",
+      bytes: 30136,
+      sha256: "59bbb53ff5bfa66c1f07b45b0c632a4124d47dce9359a2c5d65858bb9b18cb24"
+    },
+    {
+      name: "pinyin_simp.reverse.bin",
+      bytes: 57300,
+      sha256: "1bc620a95be0f3fc2f04c7ca9835bea103c4971c7a0eb1f837dd5c019d9c4fa0"
+    }
+  ],
+  sourceHashes: {
+    "cn_dicts/8105.dict.yaml": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+    "cn_dicts/base.dict.yaml": "19f6f96f5dfe553545f36c979001a12e3f3c0316f4e23f4382960a13e93e7550",
+    "cn_dicts/ext.dict.yaml": "f3843fecd2ec69ab823360383e8a07b4a69f4189133a87186f1702b350c1db2e",
+    "cn_dicts/tencent.dict.yaml": "858a641cef8b22d5c7966efcada3332c780ef4ac7b188318d221b450e673eca5"
+  }
+};
+
+// src/dict/tar.ts
+var ALLOWED_EXTRA = /* @__PURE__ */ new Set(["package.json", "README.md", "LICENSE"]);
+var EXTRA_LIMIT = 256 * 1024;
+var TarError = class extends Error {
+};
+function readString(block, offset, length) {
+  let end = offset;
+  while (end < offset + length && block[end] !== 0) end++;
+  return new TextDecoder().decode(block.subarray(offset, end));
+}
+function readOctal(block, offset, length) {
+  const text = readString(block, offset, length).trim();
+  if (!/^[0-7]*$/.test(text)) throw new TarError(`\u5F52\u6863\u5934\u91CC\u7684\u6570\u5B57\u4E0D\u5408\u6CD5\uFF1A${text}`);
+  return text ? Number.parseInt(text, 8) : 0;
+}
+async function extractTgz(stream, expected) {
+  const want = new Map(expected.map((f) => [f.name, f.bytes]));
+  const out = /* @__PURE__ */ new Map();
+  const gunzip2 = new DecompressionStream("gzip");
+  const reader = stream.pipeThrough(gunzip2).getReader();
+  let pending = new Uint8Array(0);
+  let done = false;
+  const take = async (n) => {
+    while (pending.length < n && !done) {
+      const { value, done: finished } = await reader.read();
+      if (finished) {
+        done = true;
+        break;
+      }
+      const merged = new Uint8Array(pending.length + value.length);
+      merged.set(pending);
+      merged.set(value, pending.length);
+      pending = merged;
+    }
+    if (pending.length < n) return null;
+    const chunk = pending.subarray(0, n);
+    pending = pending.subarray(n);
+    return chunk;
+  };
+  let extraBytes = 0;
+  try {
+    for (; ; ) {
+      const header = await take(512);
+      if (!header) throw new TarError("\u5F52\u6863\u4E0D\u5B8C\u6574\uFF1A\u7F3A\u5C11\u7ED3\u5C3E\u6807\u8BB0");
+      if (header.every((b) => b === 0)) break;
+      const name = readString(header, 0, 100);
+      const prefix = readString(header, 345, 155);
+      const path = prefix ? `${prefix}/${name}` : name;
+      const size = readOctal(header, 124, 12);
+      const type = String.fromCharCode(header[156] || 48);
+      if (!path.startsWith("package/") || path.includes("..") || path.includes("\\")) {
+        throw new TarError(`\u5F52\u6863\u91CC\u6709\u8D8A\u754C\u8DEF\u5F84\uFF1A${path}`);
+      }
+      const rel = path.slice("package/".length);
+      const padded = Math.ceil(size / 512) * 512;
+      if (type === "5") continue;
+      if (type !== "0") throw new TarError(`\u5F52\u6863\u91CC\u6709\u4E0D\u652F\u6301\u7684\u6761\u76EE\u7C7B\u578B ${type}\uFF1A${path}`);
+      const expectedSize = want.get(rel);
+      if (expectedSize !== void 0) {
+        if (size !== expectedSize) throw new TarError(`${rel} \u5927\u5C0F ${size} \u4E0E\u6E05\u5355 ${expectedSize} \u4E0D\u7B26`);
+        const body = new Uint8Array(size);
+        let filled = 0;
+        while (filled < size) {
+          const chunk = await take(Math.min(size - filled, 1024 * 1024));
+          if (!chunk) throw new TarError(`${rel} \u5185\u5BB9\u4E0D\u5B8C\u6574`);
+          body.set(chunk, filled);
+          filled += chunk.length;
+        }
+        if (padded > size && !await take(padded - size)) throw new TarError(`${rel} \u586B\u5145\u4E0D\u5B8C\u6574`);
+        out.set(rel, body);
+      } else if (ALLOWED_EXTRA.has(rel)) {
+        extraBytes += size;
+        if (extraBytes > EXTRA_LIMIT) throw new TarError("\u5F52\u6863\u91CC\u7684\u9644\u5E26\u6587\u4EF6\u8FC7\u5927");
+        if (!await take(padded)) throw new TarError(`${rel} \u5185\u5BB9\u4E0D\u5B8C\u6574`);
+      } else {
+        throw new TarError(`\u5F52\u6863\u91CC\u6709\u6E05\u5355\u4EE5\u5916\u7684\u6587\u4EF6\uFF1A${rel}`);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  for (const f of expected) {
+    if (!out.has(f.name)) throw new TarError(`\u5F52\u6863\u91CC\u7F3A\u5C11 ${f.name}`);
+  }
+  return out;
+}
+
+// src/dict/manager.ts
+var DEV_URLS = true ? null : null;
+var BUILT_IN = catalog_default;
+var CATALOG = DEV_URLS ? { ...BUILT_IN, urls: DEV_URLS } : BUILT_IN;
+var USING_DEV_URLS = Boolean(DEV_URLS);
+var DEFAULT_CONFIG = {
+  retryDelaysMs: [3e4, 12e4],
+  jitter: 0.2,
+  cooldownMs: 30 * 6e4,
+  requestTimeoutMs: 9e4,
+  lockStaleMs: 45e3,
+  heartbeatMs: 1e4,
+  activationFailureLimit: 2
+};
+var FetchFailure = class extends Error {
+  constructor(kind, message, retryAfterMs) {
+    super(message);
+    this.kind = kind;
+    this.retryAfterMs = retryAfterMs;
+  }
+};
+async function sha256Hex(data) {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function isStorageError(error) {
+  const name = error?.name ?? "";
+  return name === "QuotaExceededError" || /quota|space|storage/i.test(String(error?.message ?? ""));
+}
+var DictManager = class {
+  constructor(store, fetcher, catalog = CATALOG, config = DEFAULT_CONFIG, log = () => void 0, now = () => Date.now()) {
+    this.store = store;
+    this.fetcher = fetcher;
+    this.catalog = catalog;
+    this.config = config;
+    this.log = log;
+    this.now = now;
+    this.state = { v: 1 };
+    this.present = /* @__PURE__ */ new Set();
+    this.phase = "none";
+    this.resuming = false;
+    this.generation = 0;
+    this.running = false;
+    this.sourceIndex = 0;
+    this.listeners = /* @__PURE__ */ new Set();
+    this.owner = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    this.disposed = false;
+    /** 任务运行中又收到了手动请求（继续、立即重试）：当前任务一结束就再调度一次。 */
+    this.rerun = false;
+  }
+  /* ---------------- 状态 ---------------- */
+  async init() {
+    try {
+      const saved = await this.store.getMeta("state");
+      this.state = saved && saved.v === 1 ? saved : { v: 1 };
+    } catch (error) {
+      this.log(`\u8BCD\u5E93\u72B6\u6001\u8BFB\u53D6\u5931\u8D25\uFF0C\u91CD\u5EFA\uFF1A${String(error)}`);
+      this.state = { v: 1 };
+    }
+    const act = this.state.activation;
+    if (act) {
+      this.state.activation = void 0;
+      this.log(`\u68C0\u6D4B\u5230\u4E0A\u6B21\u542F\u7528 ${act.id} \u672A\u5B8C\u6210\uFF0C\u8BB0\u4E3A\u4E00\u6B21\u5931\u8D25`);
+      if (act.id === this.catalog.id) this.recordActivationFailure("\u4E0A\u6B21\u542F\u7528\u9014\u4E2D\u9000\u51FA");
+    }
+    this.present = await this.store.segmentIndexes(this.catalog.id);
+    this.resuming = this.present.size > 0 && this.present.size < this.catalog.tarball.segments.length;
+    this.phase = this.derivePhase();
+    await this.save();
+    this.emit();
+  }
+  derivePhase() {
+    if (this.state.paused) return "paused";
+    if (this.isQuarantined()) return "error";
+    if (this.state.activeId === this.catalog.id && this.isComplete()) return "active";
+    if (this.isComplete()) return "ready";
+    if (this.state.lastError?.kind === "storage") return "error";
+    if (this.state.nextRetryAt && this.state.nextRetryAt > this.now()) return "waiting";
+    return "none";
+  }
+  isComplete() {
+    return this.present.size === this.catalog.tarball.segments.length;
+  }
+  isQuarantined() {
+    return Boolean(this.state.quarantine?.[this.catalog.id]);
+  }
+  status() {
+    const seg = this.catalog.tarball.segmentBytes;
+    const total = this.catalog.tarball.bytes;
+    let done = 0;
+    for (const i of this.present) done += Math.min(seg, total - i * seg);
+    const err = this.state.lastError;
+    return {
+      phase: this.phase,
+      catalog: this.catalog,
+      segmentsDone: this.present.size,
+      segmentsTotal: this.catalog.tarball.segments.length,
+      bytesDone: done,
+      bytesTotal: total,
+      nextRetryAt: this.phase === "waiting" ? this.state.nextRetryAt : void 0,
+      error: err && (this.phase === "waiting" || this.phase === "error") ? { kind: err.kind, message: err.message } : void 0,
+      pausedReason: this.state.paused,
+      activeId: this.state.activeId,
+      resuming: this.resuming
+    };
+  }
+  onChange(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  emit() {
+    const status = this.status();
+    for (const listener of this.listeners) {
+      try {
+        listener(status);
+      } catch {
+      }
+    }
+  }
+  async save() {
+    try {
+      await this.store.setMeta("state", this.state);
+    } catch (error) {
+      this.log(`\u8BCD\u5E93\u72B6\u6001\u4FDD\u5B58\u5931\u8D25\uFF1A${String(error)}`);
+    }
+  }
+  /** 一次性提示：返回 true 表示之前没提示过（并记下已提示）。 */
+  async claimNotice(key) {
+    const k = `${this.catalog.id}:${key}`;
+    if (this.state.notified?.[k]) return false;
+    this.state.notified = { ...this.state.notified ?? {}, [k]: true };
+    await this.save();
+    return true;
+  }
+  /* ---------------- 用户意图 ---------------- */
+  async pause() {
+    this.state.paused = "paused";
+    this.cancel();
+    this.phase = "paused";
+    await this.save();
+    this.emit();
+  }
+  /** 只用基础词库：保留已下载的数据，不自动下载，直到用户恢复。 */
+  async setBaseOnly(on) {
+    this.state.paused = on ? "baseOnly" : void 0;
+    if (on) {
+      this.cancel();
+      this.state.activeId = void 0;
+    }
+    this.phase = this.derivePhase();
+    await this.save();
+    this.emit();
+    if (!on) this.schedule("manual");
+  }
+  async resume() {
+    if (this.state.paused !== "paused") return;
+    this.state.paused = void 0;
+    this.phase = this.derivePhase();
+    await this.save();
+    this.emit();
+    this.schedule("manual");
+  }
+  /** 立即重试：开始新的一轮（仍是单任务、有限预算），隔离的包也重新检查一次。 */
+  async retryNow() {
+    this.state.attempts = 0;
+    this.state.nextRetryAt = void 0;
+    this.state.lastError = void 0;
+    if (this.state.quarantine?.[this.catalog.id]) {
+      const rest = { ...this.state.quarantine };
+      delete rest[this.catalog.id];
+      this.state.quarantine = rest;
+    }
+    this.state.activationFailures = 0;
+    if (this.state.paused === "paused") this.state.paused = void 0;
+    this.phase = this.derivePhase();
+    await this.save();
+    this.emit();
+    this.schedule("manual");
+  }
+  /** 删除已下载的完整词库数据（不影响学习记录）。之后保持「只用基础词库」，不会下一秒又自动下载。 */
+  async removeDownloaded() {
+    this.cancel();
+    await this.store.pruneSegments();
+    this.present.clear();
+    this.state.activeId = void 0;
+    this.state.paused = "baseOnly";
+    this.phase = "paused";
+    await this.save();
+    this.emit();
+  }
+  /* ---------------- 调度 ---------------- */
+  /**
+   * 统一入口：启动、回到前台、网络恢复、定时器、手动重试都只调这一个。
+   * 已有任务在跑就什么都不做；冷却没到就只安排定时器。
+   */
+  schedule(reason) {
+    if (this.disposed) return;
+    if (this.running) {
+      if (reason === "manual") {
+        this.rerun = true;
+        this.cancel();
+      }
+      return;
+    }
+    if (this.state.paused) return;
+    if (this.isComplete()) return;
+    if (this.isQuarantined() && reason !== "manual") return;
+    if (this.state.lastError?.kind === "storage" && reason !== "manual") return;
+    const wait = (this.state.nextRetryAt ?? 0) - this.now();
+    if (wait > 0 && reason !== "manual") {
+      this.armTimer(wait);
+      if (this.phase !== "waiting") {
+        this.phase = "waiting";
+        this.emit();
+      }
+      return;
+    }
+    void this.run(reason);
+  }
+  armTimer(ms) {
+    if (this.timer !== void 0) window.clearTimeout(this.timer);
+    this.timer = window.setTimeout(() => {
+      this.timer = void 0;
+      this.schedule("timer");
+    }, Math.max(0, ms));
+  }
+  cancel() {
+    this.generation += 1;
+    if (this.timer !== void 0) {
+      window.clearTimeout(this.timer);
+      this.timer = void 0;
+    }
+    this.wake?.();
+  }
+  sleep(ms) {
+    return new Promise((resolve) => {
+      let timer = 0;
+      const done = () => {
+        window.clearTimeout(timer);
+        if (this.wake === done) this.wake = void 0;
+        resolve();
+      };
+      timer = window.setTimeout(done, ms);
+      this.wake = done;
+    });
+  }
+  dispose() {
+    this.disposed = true;
+    this.cancel();
+    this.stopHeartbeat();
+    void this.releaseLock();
+    this.listeners.clear();
+  }
+  /* ---------------- 任务锁 ---------------- */
+  async acquireLock() {
+    const now = this.now();
+    const lock = await this.store.updateMeta("lock", (old) => {
+      if (!old || old.owner === this.owner || now - old.at > this.config.lockStaleMs) return { owner: this.owner, at: now };
+      return old;
+    });
+    return lock?.owner === this.owner;
+  }
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeat = window.setInterval(() => {
+      void this.store.updateMeta("lock", (old) => old?.owner === this.owner ? { owner: this.owner, at: this.now() } : old).catch(() => void 0);
+    }, this.config.heartbeatMs);
+  }
+  stopHeartbeat() {
+    if (this.heartbeat !== void 0) {
+      window.clearInterval(this.heartbeat);
+      this.heartbeat = void 0;
+    }
+  }
+  async releaseLock() {
+    try {
+      await this.store.updateMeta("lock", (old) => old?.owner === this.owner ? void 0 : old);
+    } catch {
+    }
+  }
+  /* ---------------- 下载 ---------------- */
+  async run(reason) {
+    const gen = ++this.generation;
+    this.running = true;
+    try {
+      if (!await this.acquireLock()) {
+        this.log("\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u8FD9\u91CC\u4E0D\u91CD\u590D\u4E0B\u8F7D");
+        this.armTimer(this.config.lockStaleMs);
+        return;
+      }
+      this.startHeartbeat();
+      this.present = await this.store.segmentIndexes(this.catalog.id);
+      this.log(`\u5B8C\u6574\u8BCD\u5E93\u4EFB\u52A1\u5F00\u59CB\uFF08${reason}\uFF09\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5`);
+      while (gen === this.generation) {
+        const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
+        if (missing.length) {
+          if (!navigator.onLine && reason !== "timer") {
+            this.setWaiting({ kind: "offline", message: "\u8BBE\u5907\u79BB\u7EBF\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED" }, void 0);
+            this.armTimer(5 * 6e4);
+            return;
+          }
+          this.phase = "downloading";
+          this.emit();
+          try {
+            await this.fetchSegment(missing[0], gen);
+          } catch (error) {
+            if (gen !== this.generation) return;
+            if (!await this.handleFailure(error, gen)) return;
+          }
+          continue;
+        }
+        this.phase = "verifying";
+        this.emit();
+        const result = await this.verifyInstalled();
+        if (gen !== this.generation) return;
+        if (result === "ok") {
+          this.state.attempts = 0;
+          this.state.nextRetryAt = void 0;
+          this.state.lastError = void 0;
+          this.phase = "ready";
+          await this.save();
+          this.log("\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5E76\u6821\u9A8C\u5B8C\u6210\uFF0C\u7B49\u5F85\u542F\u7528");
+          this.emit();
+          return;
+        }
+        if (result === "quarantined") return;
+        if (!await this.handleFailure(new FetchFailure("integrity", "\u4E0B\u8F7D\u7684\u6570\u636E\u6821\u9A8C\u4E0D\u7B26\uFF0C\u91CD\u65B0\u4E0B\u8F7D\u635F\u574F\u7684\u90E8\u5206"), gen)) return;
+      }
+    } finally {
+      this.running = false;
+      this.stopHeartbeat();
+      await this.releaseLock();
+      if (this.rerun && !this.disposed) {
+        this.rerun = false;
+        this.schedule("manual");
+      }
+    }
+  }
+  segmentRange(index) {
+    const seg = this.catalog.tarball.segmentBytes;
+    const start = index * seg;
+    return [start, Math.min(start + seg, this.catalog.tarball.bytes) - 1];
+  }
+  async withTimeout(promise) {
+    let timer;
+    const timeout2 = new Promise((_, reject) => {
+      timer = window.setTimeout(() => reject(new FetchFailure("timeout", "\u4E0B\u8F7D\u8D85\u65F6")), this.config.requestTimeoutMs);
+    });
+    try {
+      return await Promise.race([promise, timeout2]);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+  async fetchSegment(index, gen) {
+    const url = this.catalog.urls[this.sourceIndex % this.catalog.urls.length];
+    const [start, end] = this.segmentRange(index);
+    let res;
+    try {
+      res = await this.withTimeout(this.fetcher(url, start, end));
+    } catch (error) {
+      if (error instanceof FetchFailure) throw error;
+      throw new FetchFailure("network", `\u8FDE\u63A5\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (gen !== this.generation) return;
+    const { status } = res;
+    if (status === 429) {
+      const retryAfter = Number(res.headers["retry-after"] ?? res.headers["Retry-After"]);
+      throw new FetchFailure("ratelimit", "\u670D\u52A1\u5668\u9650\u6D41", Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 6 * 3600) * 1e3 : void 0);
+    }
+    if (status === 404 || status === 403 || status === 410) throw new FetchFailure("missing", `\u6587\u4EF6\u4E0D\u5728\u8FD9\u4E2A\u5730\u5740\uFF08HTTP ${status}\uFF09\uFF0C\u53EF\u80FD\u955C\u50CF\u8FD8\u6CA1\u540C\u6B65`);
+    if (status >= 500) throw new FetchFailure("server", `\u670D\u52A1\u5668\u9519\u8BEF\uFF08HTTP ${status}\uFF09`);
+    if (status === 200 && res.body.byteLength === this.catalog.tarball.bytes) {
+      for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
+        if (gen !== this.generation) return;
+        const [s, e] = this.segmentRange(i);
+        await this.storeVerified(i, res.body.slice(s, e + 1));
+      }
+      return;
+    }
+    if (status !== 206 && status !== 200) throw new FetchFailure("server", `\u610F\u5916\u7684\u54CD\u5E94\uFF08HTTP ${status}\uFF09`);
+    const expected = end - start + 1;
+    if (res.body.byteLength !== expected) {
+      const type = res.headers["content-type"] ?? res.headers["Content-Type"] ?? "";
+      throw new FetchFailure("integrity", `\u957F\u5EA6\u4E0D\u7B26\uFF1A\u6536\u5230 ${res.body.byteLength} \u5B57\u8282\uFF0C\u5E94\u4E3A ${expected}${/html/i.test(type) ? "\uFF08\u670D\u52A1\u5668\u8FD4\u56DE\u4E86\u7F51\u9875\uFF0C\u4E0D\u662F\u8BCD\u5E93\u6570\u636E\uFF09" : ""}`);
+    }
+    await this.storeVerified(index, res.body);
+  }
+  async storeVerified(index, body) {
+    const hash = await sha256Hex(body);
+    if (hash !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `\u7B2C ${index + 1} \u6BB5\u6821\u9A8C\u4E0D\u7B26`);
+    try {
+      await this.store.putSegment(this.catalog.id, index, body);
+    } catch (error) {
+      throw new FetchFailure(isStorageError(error) ? "storage" : "network", `\u4FDD\u5B58\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.present.add(index);
+    this.emit();
+  }
+  /** 返回 true 表示本轮还能继续（已按退避等待过）；false 表示本轮结束。 */
+  async handleFailure(error, gen) {
+    const failure = error instanceof FetchFailure ? error : new FetchFailure("network", String(error));
+    this.log(`\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5931\u8D25\uFF1A${failure.kind} ${failure.message}`);
+    if (failure.kind === "storage") {
+      this.state.lastError = { kind: "storage", message: "\u5B58\u50A8\u7A7A\u95F4\u4E0D\u8DB3\u6216\u65E0\u6CD5\u5199\u5165\uFF0C\u91CA\u653E\u7A7A\u95F4\u540E\u5728\u8BBE\u7F6E\u91CC\u70B9\u300C\u7ACB\u5373\u91CD\u8BD5\u300D", at: this.now() };
+      this.phase = "error";
+      await this.save();
+      this.emit();
+      return false;
+    }
+    const attempts = (this.state.attempts ?? 0) + 1;
+    this.state.attempts = attempts;
+    if (["missing", "integrity", "server", "network", "timeout"].includes(failure.kind) && this.catalog.urls.length > 1) {
+      this.sourceIndex = (this.sourceIndex + 1) % this.catalog.urls.length;
+    }
+    if (attempts > this.config.retryDelaysMs.length) {
+      const cooldown = Math.max(this.config.cooldownMs, failure.retryAfterMs ?? 0);
+      this.state.attempts = 0;
+      this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + cooldown);
+      return false;
+    }
+    const base = this.config.retryDelaysMs[attempts - 1];
+    const jittered = base * (1 + (Math.random() * 2 - 1) * this.config.jitter);
+    const delay = Math.max(jittered, failure.retryAfterMs ?? 0);
+    this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + delay);
+    await this.sleep(delay);
+    return gen === this.generation;
+  }
+  setWaiting(error, nextRetryAt) {
+    this.state.lastError = { ...error, at: this.now() };
+    this.state.nextRetryAt = nextRetryAt;
+    this.phase = "waiting";
+    void this.save();
+    if (nextRetryAt !== void 0 && this.state.attempts === 0) this.armTimer(nextRetryAt - this.now());
+    this.emit();
+  }
+  /* ---------------- 校验与取出 ---------------- */
+  /**
+   * 把已下载的分段拼回 tgz，解包，逐个核对文件 sha256。成功返回文件内容。
+   * 失败时找出坏掉的分段删掉（下次只补这些），整包格式不对则隔离，不无限重下。
+   */
+  async extractInstalled() {
+    const buffers = [];
+    const bad = [];
+    for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
+      const data = await this.store.getSegment(this.catalog.id, i);
+      if (!data || await sha256Hex(data) !== this.catalog.tarball.segments[i]) {
+        bad.push(i);
+        continue;
+      }
+      buffers.push(data);
+    }
+    if (bad.length) {
+      for (const i of bad) {
+        await this.store.deleteSegment(this.catalog.id, i);
+        this.present.delete(i);
+      }
+      this.state.activeId = void 0;
+      this.log(`\u5B8C\u6574\u8BCD\u5E93\u6709 ${bad.length} \u6BB5\u7F3A\u5931\u6216\u635F\u574F\uFF0C\u5DF2\u4E22\u5F03\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B`);
+      this.phase = this.derivePhase();
+      await this.save();
+      this.emit();
+      return null;
+    }
+    try {
+      const files = await extractTgz(new Blob(buffers).stream(), this.catalog.files);
+      for (const f of this.catalog.files) {
+        const body = files.get(f.name);
+        if (await sha256Hex(body) !== f.sha256) throw new TarError(`${f.name} \u6821\u9A8C\u4E0D\u7B26`);
+      }
+      return files;
+    } catch (error) {
+      this.quarantine(`\u683C\u5F0F\u6216\u5185\u5BB9\u4E0E\u6E05\u5355\u4E0D\u7B26\uFF1A${error instanceof Error ? error.message : String(error)}`, "format");
+      await this.save();
+      this.emit();
+      return null;
+    }
+  }
+  async verifyInstalled() {
+    const files = await this.extractInstalled();
+    if (files) return "ok";
+    return this.isQuarantined() ? "quarantined" : "repair";
+  }
+  quarantine(reason, kind) {
+    this.state.quarantine = { ...this.state.quarantine ?? {}, [this.catalog.id]: { reason, at: this.now() } };
+    this.state.lastError = { kind, message: reason, at: this.now() };
+    this.state.activeId = void 0;
+    this.phase = "error";
+    this.log(`\u5B8C\u6574\u8BCD\u5E93 ${this.catalog.id} \u5DF2\u9694\u79BB\uFF1A${reason}`);
+  }
+  /* ---------------- 启用记录 ---------------- */
+  /** 插件开始用完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
+  async beginActivation() {
+    this.state.activation = { id: this.catalog.id, startedAt: this.now() };
+    await this.save();
+  }
+  async endActivation(ok, message = "") {
+    this.state.activation = void 0;
+    if (ok) {
+      this.state.activeId = this.catalog.id;
+      this.state.activationFailures = 0;
+      this.state.lastError = void 0;
+      this.phase = "active";
+      void this.store.pruneSegments(this.catalog.id).catch(() => void 0);
+    } else {
+      this.recordActivationFailure(message || "\u5F15\u64CE\u52A0\u8F7D\u5931\u8D25");
+    }
+    await this.save();
+    this.emit();
+  }
+  /** 连续失败达到上限就隔离这个包：不在每次开软件时重复同样的失败，手动「立即重试」可以解除。 */
+  recordActivationFailure(reason) {
+    const failures = (this.state.activationFailures ?? 0) + 1;
+    this.state.activationFailures = failures;
+    this.state.activeId = void 0;
+    if (failures >= this.config.activationFailureLimit) {
+      this.quarantine(`\u542F\u7528\u5931\u8D25 ${failures} \u6B21\uFF1A${reason}`, "activation");
+    } else {
+      this.state.lastError = { kind: "activation", message: reason, at: this.now() };
+      this.phase = this.derivePhase();
+    }
+  }
+  /** 这台设备上完整词库是否可以直接启用（已下载齐、未隔离、未选择只用基础词库）。 */
+  canActivate() {
+    return this.isComplete() && !this.isQuarantined() && !this.state.paused;
+  }
+};
+
+// src/dict/store.ts
+var DB_NAME = "just-type-dict";
+var DB_VERSION = 1;
+var SEGMENTS = "segments";
+var META = "meta";
+var BACKUPS = "backups";
+function request(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error("IndexedDB \u8BF7\u6C42\u5931\u8D25"));
+  });
+}
+function transactionDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("IndexedDB \u4E8B\u52A1\u5931\u8D25"));
+    tx.onabort = () => reject(tx.error ?? new Error("IndexedDB \u4E8B\u52A1\u88AB\u4E2D\u6B62"));
+  });
+}
+var DictStore = class {
+  db() {
+    this.dbPromise ?? (this.dbPromise = new Promise((resolve, reject) => {
+      const open = indexedDB.open(DB_NAME, DB_VERSION);
+      open.onupgradeneeded = () => {
+        const db = open.result;
+        for (const name of [SEGMENTS, META, BACKUPS]) if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+      };
+      open.onsuccess = () => {
+        const db = open.result;
+        db.onversionchange = () => {
+          db.close();
+          this.dbPromise = void 0;
+        };
+        resolve(db);
+      };
+      open.onerror = () => reject(open.error ?? new Error("\u6253\u4E0D\u5F00\u8BCD\u5E93\u5B58\u50A8"));
+      open.onblocked = () => reject(new Error("\u8BCD\u5E93\u5B58\u50A8\u88AB\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u5360\u7528\uFF0C\u7A0D\u540E\u91CD\u8BD5"));
+    }));
+    this.dbPromise.catch(() => {
+      this.dbPromise = void 0;
+    });
+    return this.dbPromise;
+  }
+  async getMeta(key) {
+    const db = await this.db();
+    return await request(db.transaction(META, "readonly").objectStore(META).get(key));
+  }
+  async setMeta(key, value) {
+    const db = await this.db();
+    const tx = db.transaction(META, "readwrite");
+    tx.objectStore(META).put(value, key);
+    await transactionDone(tx);
+  }
+  /** 在同一个事务里读改写，给任务锁用：两个 Obsidian 窗口同时抢锁时不会互相覆盖。 */
+  async updateMeta(key, update) {
+    const db = await this.db();
+    const tx = db.transaction(META, "readwrite");
+    const store = tx.objectStore(META);
+    let next;
+    const get = store.get(key);
+    get.onsuccess = () => {
+      next = update(get.result);
+      store.put(next, key);
+    };
+    await transactionDone(tx);
+    return next;
+  }
+  /** 已保存的分段序号。 */
+  async segmentIndexes(catalogId) {
+    const db = await this.db();
+    const range = IDBKeyRange.bound(`${catalogId}#`, `${catalogId}#\uFFFF`);
+    const keys = await request(db.transaction(SEGMENTS, "readonly").objectStore(SEGMENTS).getAllKeys(range));
+    const out = /* @__PURE__ */ new Set();
+    for (const key of keys) {
+      if (typeof key !== "string") continue;
+      const index = Number(key.slice(catalogId.length + 1));
+      if (Number.isInteger(index)) out.add(index);
+    }
+    return out;
+  }
+  async getSegment(catalogId, index) {
+    const db = await this.db();
+    return await request(db.transaction(SEGMENTS, "readonly").objectStore(SEGMENTS).get(`${catalogId}#${index}`));
+  }
+  /** 每存好一段就是一个检查点，不把状态推迟到退出时才写。 */
+  async putSegment(catalogId, index, data) {
+    const db = await this.db();
+    const tx = db.transaction(SEGMENTS, "readwrite");
+    tx.objectStore(SEGMENTS).put(data, `${catalogId}#${index}`);
+    await transactionDone(tx);
+  }
+  async deleteSegment(catalogId, index) {
+    const db = await this.db();
+    const tx = db.transaction(SEGMENTS, "readwrite");
+    tx.objectStore(SEGMENTS).delete(`${catalogId}#${index}`);
+    await transactionDone(tx);
+  }
+  /** 删掉不属于 keepId 的分段（旧版本或放弃的包）。学习记录不在这里，不受影响。 */
+  async pruneSegments(keepId) {
+    const db = await this.db();
+    const tx = db.transaction(SEGMENTS, "readwrite");
+    const store = tx.objectStore(SEGMENTS);
+    let removed = 0;
+    const all = store.getAllKeys();
+    all.onsuccess = () => {
+      for (const key of all.result) {
+        if (!keepId || typeof key !== "string" || !key.startsWith(`${keepId}#`)) {
+          store.delete(key);
+          removed++;
+        }
+      }
+    };
+    await transactionDone(tx);
+    return removed;
+  }
+  async getBackup(key) {
+    const db = await this.db();
+    return await request(db.transaction(BACKUPS, "readonly").objectStore(BACKUPS).get(key));
+  }
+  async putBackup(key, value) {
+    const db = await this.db();
+    const tx = db.transaction(BACKUPS, "readwrite");
+    tx.objectStore(BACKUPS).put(value, key);
+    await transactionDone(tx);
+  }
+  close() {
+    void this.dbPromise?.then((db) => db.close()).catch(() => void 0);
+    this.dbPromise = void 0;
+  }
+};
+
+// src/dict/ui.ts
+var import_obsidian = require("obsidian");
+var requestUrlFetcher = async (url, start, end) => {
+  const res = await (0, import_obsidian.requestUrl)({ url, method: "GET", throw: false, headers: { Range: `bytes=${start}-${end}` } });
+  return { status: res.status, body: res.arrayBuffer, headers: res.headers };
+};
+function fullDictIdentity(catalog) {
+  return { label: catalog.label, source: `${catalog.id}\uFF08${catalog.source}\uFF09`, files: catalog.files };
+}
+function mb(bytes) {
+  return (bytes / 1e6).toFixed(1);
+}
+function approxSize(catalog) {
+  return `\u7EA6 ${Math.round(catalog.tarball.bytes / 1e6)} MB`;
+}
+function describeDict(status, ctx) {
+  const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
+  const reason = status.error ? `\uFF08\u539F\u56E0\uFF1A${status.error.message}\uFF09` : "";
+  if (ctx.switching === "full") {
+    return { chip: "\u6B63\u5728\u542F\u7528\u5B8C\u6574\u8BCD\u5E93\u2026", detail: "\u6B63\u5728\u542F\u7528\u5B8C\u6574\u8BCD\u5E93\u3002\u8FD9\u4E00\u77AC\u95F4\u6253\u7684\u5B57\u4F1A\u5728\u542F\u7528\u540E\u6309\u987A\u5E8F\u5904\u7406\uFF0C\u4E0D\u4F1A\u4E22\u3002", attention: false };
+  }
+  if (ctx.switching === "base") {
+    return { chip: "\u6B63\u5728\u5207\u56DE\u57FA\u7840\u8BCD\u5E93\u2026", detail: "\u6B63\u5728\u5207\u56DE\u57FA\u7840\u8BCD\u5E93\u3002\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002", attention: false };
+  }
+  switch (status.phase) {
+    case "active":
+      return {
+        chip: null,
+        detail: ctx.fullLoaded ? `\u5B8C\u6574\u8BCD\u5E93\u5DF2\u542F\u7528\uFF1A${status.catalog.label}\u3002\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528\u3002` : "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\u5E76\u6821\u9A8C\uFF0C\u4E0B\u6B21\u6253\u5F00\u65F6\u542F\u7528\u3002",
+        attention: false
+      };
+    case "ready":
+      return {
+        chip: ctx.fullLoaded ? null : "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u7ED3\u675F\u5F53\u524D\u8F93\u5165\u540E\u542F\u7528",
+        detail: ctx.fullLoaded ? `\u5B8C\u6574\u8BCD\u5E93\u5DF2\u542F\u7528\uFF1A${status.catalog.label}\u3002\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528\u3002` : "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\u5E76\u6821\u9A8C\u3002\u7ED3\u675F\u5F53\u524D\u8F93\u5165\u3001\u505C\u624B\u7EA6 2 \u79D2\u540E\u81EA\u52A8\u542F\u7528\uFF0C\u4E0D\u4F1A\u6253\u65AD\u6B63\u5728\u6253\u7684\u62FC\u97F3\u3002",
+        attention: false
+      };
+    case "downloading":
+      return {
+        chip: `\u5B8C\u6574\u8BCD\u5E93 ${size}`,
+        detail: `\u6B63\u5728\u540E\u53F0\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF1A${size}\u3002\u53EF\u7EE7\u7EED\u8F93\u5165\uFF0C\u57FA\u7840\u8BCD\u5E93\u7167\u5E38\u5DE5\u4F5C\u3002` + (status.resuming ? "\u63A5\u7740\u4E0A\u6B21\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u7EE7\u7EED\uFF0C\u4E0D\u4ECE\u5934\u91CD\u4E0B\u3002" : ""),
+        attention: false
+      };
+    case "verifying":
+      return { chip: "\u5B8C\u6574\u8BCD\u5E93 \u6821\u9A8C\u4E2D", detail: "\u4F20\u8F93\u5B8C\u6210\uFF0C\u6B63\u5728\u9010\u4E2A\u6838\u5BF9\u6587\u4EF6\uFF08\u8FD8\u6CA1\u6709\u542F\u7528\uFF09\u3002", attention: false };
+    case "waiting": {
+      if (status.error?.kind === "offline") {
+        return { chip: "\u5B8C\u6574\u8BCD\u5E93 \u7B49\u5F85\u8054\u7F51", detail: "\u8BBE\u5907\u79BB\u7EBF\u3002\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002", attention: false };
+      }
+      const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 6e4)) : 0;
+      const done = status.segmentsDone ? `\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9 ${size}\uFF0C\u4F1A\u63A5\u7740\u4E0B\u3002` : "";
+      const detail = minutes > 5 ? `\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\uFF0C\u7EA6 ${minutes} \u5206\u949F\u540E\u81EA\u52A8\u91CD\u8BD5\uFF08\u671F\u95F4\u5173\u6389\u518D\u6253\u5F00\u4E5F\u4F1A\u6309\u65F6\u63A5\u7740\u8BD5\uFF0C\u4E0D\u7528\u624B\u52A8\u64CD\u4F5C\uFF09\u3002${done}${reason}` : `\u5B8C\u6574\u8BCD\u5E93\u6682\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\uFF0C\u5C06\u81EA\u52A8\u91CD\u8BD5\u3002${done}${reason}`;
+      return { chip: "\u5B8C\u6574\u8BCD\u5E93 \u7A0D\u540E\u91CD\u8BD5", detail, attention: false };
+    }
+    case "paused":
+      if (status.pausedReason === "baseOnly") {
+        return {
+          chip: null,
+          detail: "\u5DF2\u9009\u62E9\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u4E0B\u8F7D\u3002" + (status.segmentsDone === status.segmentsTotal ? "\u5DF2\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93\u4ECD\u4FDD\u7559\uFF0C\u6062\u590D\u540E\u65E0\u9700\u91CD\u4E0B\u3002" : ""),
+          attention: false
+        };
+      }
+      return { chip: null, detail: `\u5DF2\u6682\u505C\uFF0C\u53EF\u7EE7\u7EED\u4E0B\u8F7D\u3002${status.segmentsDone ? `\u5DF2\u4E0B\u8F7D ${size}\uFF0C\u7EE7\u7EED\u540E\u63A5\u7740\u4E0B\u3002` : ""}`, attention: false };
+    case "error":
+      if (status.error?.kind === "storage") {
+        return { chip: "\u5B8C\u6574\u8BCD\u5E93 \u7A7A\u95F4\u4E0D\u8DB3", detail: `${status.error.message}\u3002\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\uFF0C\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002`, attention: true };
+      }
+      return {
+        chip: "\u5B8C\u6574\u8BCD\u5E93 \u5DF2\u505C\u7528",
+        detail: `\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u6216\u542F\u7528\u53CD\u590D\u5931\u8D25\uFF0C\u5DF2\u505C\u7528\u8FD9\u4E2A\u7248\u672C\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002\u53EF\u4EE5\u70B9\u300C\u7ACB\u5373\u91CD\u8BD5\u300D\u91CD\u65B0\u68C0\u67E5\u3002${reason}`,
+        attention: true
+      };
+    default:
+      return {
+        chip: null,
+        detail: status.segmentsDone ? `\u5DF2\u4E0B\u8F7D ${size}\uFF0C\u7A0D\u540E\u81EA\u52A8\u63A5\u7740\u4E0B\u8F7D\u3002` : `\u5C1A\u672A\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\u3002\u57FA\u7840\u8BCD\u5E93\u5C31\u7EEA\u540E\u4F1A\u5728\u540E\u53F0\u81EA\u52A8\u4E0B\u8F7D\u3002`,
+        attention: false
+      };
+  }
+}
+var DictChip = class {
+  constructor(onTap) {
+    this.el = document.body.createDiv({ cls: "just-type-dict-chip" });
+    this.el.setAttribute("role", "status");
+    this.el.addEventListener("click", onTap);
+  }
+  /** anchor：当前笔记内容区的位置；没有打开的笔记就不显示。 */
+  render(description, anchor) {
+    const text = description?.chip;
+    if (!text || !anchor || !anchor.width) {
+      this.el.removeClass("is-visible");
+      return;
+    }
+    this.el.setText(text);
+    this.el.toggleClass("is-attention", Boolean(description?.attention));
+    this.el.addClass("is-visible");
+    const margin = 10;
+    const vv = window.visualViewport;
+    const maxRight = vv ? vv.offsetLeft + vv.width : window.innerWidth;
+    const right = Math.min(anchor.right, maxRight) - margin;
+    this.el.style.left = `${Math.round(Math.max(anchor.left + margin, right - this.el.offsetWidth))}px`;
+    this.el.style.top = `${Math.round(anchor.top + margin)}px`;
+  }
+  remove() {
+    this.el.remove();
+  }
+};
+var DictStatusModal = class extends import_obsidian.Modal {
+  constructor(app, controls) {
+    super(app);
+    this.controls = controls;
+  }
+  onOpen() {
+    this.setTitle("\u5B8C\u6574\u8BCD\u5E93");
+    this.contentEl.addClass("just-type-dict-modal");
+    this.render();
+    this.unsubscribe = this.controls.subscribe(() => this.render());
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    const snap = this.controls.snapshot();
+    if (!snap) {
+      contentEl.createEl("p", { text: "\u8FD9\u53F0\u8BBE\u5907\u4E0A\u65E0\u6CD5\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93\u5B58\u50A8\uFF08\u672C\u673A\u5B58\u50A8\u6253\u4E0D\u5F00\uFF09\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002" });
+      return;
+    }
+    const { status, ctx } = snap;
+    const description = describeDict(status, ctx);
+    contentEl.createEl("p", { text: description.detail, cls: description.attention ? "mod-warning" : "" });
+    if (status.phase === "downloading" || status.segmentsDone > 0 && status.segmentsDone < status.segmentsTotal) {
+      const bar = contentEl.createEl("progress");
+      bar.max = status.bytesTotal;
+      bar.value = status.bytesDone;
+    }
+    contentEl.createEl("p", {
+      cls: "just-type-dict-note",
+      text: `\u8BCD\u5E93\u6765\u81EA\u96FE\u51C7\u62FC\u97F3\uFF08${status.catalog.license}\uFF09\uFF0C\u4ECE npmmirror \u4E0B\u8F7D\uFF0C\u5907\u7528 npmjs\uFF1B\u6BCF\u4E00\u6BB5\u90FD\u548C\u63D2\u4EF6\u5185\u7F6E\u7684\u6821\u9A8C\u503C\u6838\u5BF9\u3002\u53EA\u5B58\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\uFF0C\u4E0D\u968F Obsidian Sync \u540C\u6B65\u3002\u6362\u8BCD\u5E93\u4E0D\u5F71\u54CD\u5B66\u4E60\u8BB0\u5F55\u3002`
+    });
+    const actions = contentEl.createDiv({ cls: "just-type-diag-actions" });
+    const button = (text, onClick, cta = false) => {
+      actions.createEl("button", { text, cls: cta ? "mod-cta" : "" }).addEventListener("click", onClick);
+    };
+    const complete = status.segmentsDone === status.segmentsTotal;
+    if (status.pausedReason === "baseOnly") {
+      button("\u6062\u590D\u4F7F\u7528\u5B8C\u6574\u8BCD\u5E93", () => this.controls.setBaseOnly(false), true);
+    } else {
+      if (!complete || status.phase === "error") button("\u7ACB\u5373\u91CD\u8BD5", () => this.controls.retry(), true);
+      if (status.pausedReason === "paused") button("\u7EE7\u7EED\u4E0B\u8F7D", () => this.controls.resume(), true);
+      else if (!complete) button("\u6682\u505C\u81EA\u52A8\u4E0B\u8F7D", () => this.controls.pause());
+      button("\u53EA\u7528\u57FA\u7840\u8BCD\u5E93", () => this.controls.setBaseOnly(true));
+    }
+    if (status.segmentsDone > 0) button("\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93", () => this.controls.remove());
+    button("\u5173\u95ED", () => this.close());
+  }
+  onClose() {
+    this.unsubscribe?.();
+    this.contentEl.empty();
+  }
+};
 
 // src/emoji.ts
 var EMOJI = [
@@ -505,7 +1473,7 @@ function searchEmoji(query, limit) {
 }
 
 // src/update.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 var PLUGIN_ID = "just-type";
 var PLUGIN_PAGE_URI = `obsidian://show-plugin?id=${PLUGIN_ID}`;
 var CHECK_INTERVAL_MS = 24 * 60 * 60 * 1e3;
@@ -565,9 +1533,9 @@ function compareVersions(a, b) {
   return 0;
 }
 async function fetchJson(url) {
-  const request = (0, import_obsidian.requestUrl)({ url, method: "GET", throw: false, headers: { Accept: "application/json" } });
+  const request2 = (0, import_obsidian2.requestUrl)({ url, method: "GET", throw: false, headers: { Accept: "application/json" } });
   const timer = new Promise((_, reject) => window.setTimeout(() => reject(new Error("\u8D85\u65F6")), REQUEST_TIMEOUT_MS));
-  const response = await Promise.race([request, timer]);
+  const response = await Promise.race([request2, timer]);
   if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
   return response.json;
 }
@@ -663,6 +1631,15 @@ var UpdateChecker = class {
 // src/release-notes.ts
 var RELEASE_NOTES = [
   {
+    version: "0.7.24",
+    items: [
+      "\u5B8C\u6574\u8BCD\u5E93\uFF08\u7EA6 187 \u4E07\u6761\uFF0C\u6765\u81EA\u96FE\u51C7\u62FC\u97F3\uFF09\uFF1A\u6253\u5F00\u540E\u5148\u7528\u5185\u7F6E\u8BCD\u5E93\uFF0C\u9A6C\u4E0A\u80FD\u6253\u5B57\uFF1B\u540E\u53F0\u81EA\u52A8\u4E0B\u8F7D\u7EA6 26 MB\uFF0C\u4E0B\u597D\u540E\u5728\u4F60\u505C\u624B\u65F6\u81EA\u52A8\u6362\u4E0A\uFF0C\u4E4B\u540E\u79BB\u7EBF\u53EF\u7528\u3002\u4E09\u5B57\u8BCD\u3001\u56DB\u5B57\u6210\u8BED\u660E\u663E\u66F4\u51C6",
+      "\u56FD\u5185\u4ECE npmmirror \u4E0B\u8F7D\uFF0C\u4E0D\u7528\u7FFB\u5899\uFF1B\u6BCF\u4E00\u6BB5\u90FD\u6838\u5BF9\u6821\u9A8C\u503C\uFF0C\u4E0B\u8F7D\u4E2D\u65AD\u4E0B\u6B21\u63A5\u7740\u4E0B",
+      "\u7B14\u8BB0\u53F3\u4E0A\u89D2\u663E\u793A\u4E0B\u8F7D\u8FDB\u5EA6\uFF1B\u8BBE\u7F6E\u300C\u5B8C\u6574\u8BCD\u5E93\u300D\u91CC\u53EF\u4EE5\u6682\u505C\u3001\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\u6216\u5220\u9664\u5DF2\u4E0B\u8F7D\u7684\u6570\u636E",
+      "\u6362\u8BCD\u5E93\u4E0D\u5F71\u54CD\u8F93\u5165\u6CD5\u5DF2\u7ECF\u8BB0\u4F4F\u7684\u4F60\u7684\u7528\u8BCD\u4E60\u60EF"
+    ]
+  },
+  {
     version: "0.7.23",
     items: [
       "\u9009\u8FC7\u7684\u8BCD\u4F1A\u88AB\u66F4\u53EF\u9760\u5730\u8BB0\u4F4F\uFF1A\u4EE5\u524D\u6700\u540E\u4E00\u6B21\u4E0A\u5C4F\u7684\u8BCD\uFF0C\u5982\u679C\u4E4B\u540E Obsidian \u88AB\u7CFB\u7EDF\u5173\u95ED\uFF0C\u53EF\u80FD\u6CA1\u88AB\u8BB0\u4F4F\uFF08\u952E\u76D8\u548C\u624B\u6307\u70B9\u9009\u90FD\u4F1A\uFF09\uFF0C\u73B0\u5728\u4E0A\u5C4F\u540E\u7ACB\u5373\u4FDD\u5B58",
@@ -694,7 +1671,7 @@ var RELEASE_NOTES = [
 ];
 
 // src/main.ts
-var PLUGIN_VERSION = "0.7.23";
+var PLUGIN_VERSION = "0.7.24";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -895,7 +1872,15 @@ var RimeWorkerClient = class {
     this.chain = result.catch(() => void 0);
     return result;
   }
+  /** 等已排队的调用都处理完。换引擎前用：在途的按键和存盘先做完。 */
+  idle() {
+    return this.chain.then(() => void 0);
+  }
   destroy() {
+    this.fatal ?? (this.fatal = new Error("RIME \u5F15\u64CE\u5DF2\u505C\u6B62"));
+    const pending = this.pending;
+    this.pending = void 0;
+    pending?.reject(this.fatal);
     this.worker.terminate();
     URL.revokeObjectURL(this.workerUrl);
     for (const url of this.assetUrls) URL.revokeObjectURL(url);
@@ -956,7 +1941,7 @@ var MODE_NOTICE = {
   emoji: "\u8868\u60C5 \u2014 \u6253\u5173\u952E\u8BCD\u641C\u7D22\uFF0C\u5982 xiao / smile / huo\u3002\u6309 Shift \u56DE\u4E2D\u6587"
 };
 var UPDATE_DESC = "\u6BCF 24 \u5C0F\u65F6\u6700\u591A\u8054\u7F51\u4E00\u6B21\uFF08npmmirror\uFF0C\u5907\u9009 jsDelivr\u3001GitHub\uFF09\uFF0C\u53EA\u8BFB\u53D6\u6700\u65B0\u7248\u672C\u53F7\u548C\u4E00\u53E5\u66F4\u65B0\u8981\u70B9\uFF0C\u4E0D\u53D1\u9001\u4EFB\u4F55\u672C\u673A\u6570\u636E\u3002\u66F4\u65B0\u4ECD\u7531\u4F60\u5728\u63D2\u4EF6\u9875\u81EA\u5DF1\u70B9\u300C\u66F4\u65B0\u300D\u3002\u6BCF\u53F0\u8BBE\u5907\u5206\u522B\u63D0\u9192\u3002";
-var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
+var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -990,6 +1975,21 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
     }, {
+      name: "\u5B8C\u6574\u8BCD\u5E93",
+      desc: `${this.plugin.dictSummary()} \u70B9\u8FD9\u91CC\u770B\u8BE6\u60C5\u3001\u6682\u505C\u6216\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\u3002`,
+      aliases: ["dictionary", "\u8BCD\u5E93", "\u5B8C\u6574\u8BCD\u5E93", "\u4E0B\u8F7D", "\u96FE\u51C7", "rime-ice"],
+      action: () => this.plugin.openDictStatus()
+    }, {
+      name: "\u7ACB\u5373\u91CD\u8BD5\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93",
+      desc: "\u9A6C\u4E0A\u5F00\u59CB\u65B0\u4E00\u8F6E\u4E0B\u8F7D\uFF0C\u4E0D\u7B49\u81EA\u52A8\u91CD\u8BD5\u3002\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u4E0D\u4F1A\u91CD\u4E0B\u3002",
+      aliases: ["retry", "dictionary", "\u91CD\u8BD5", "\u8BCD\u5E93"],
+      action: () => this.plugin.dictRetry()
+    }, {
+      name: "\u6682\u505C\u6216\u7EE7\u7EED\u81EA\u52A8\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93",
+      desc: "\u6682\u505C\u540E\u91CD\u5F00 Obsidian \u4E5F\u4FDD\u6301\u6682\u505C\uFF0C\u76F4\u5230\u4F60\u70B9\u7EE7\u7EED\u3002\u5DF2\u4E0B\u8F7D\u7684\u90E8\u5206\u4FDD\u7559\u3002",
+      aliases: ["pause", "resume", "dictionary", "\u6682\u505C", "\u7EE7\u7EED", "\u8BCD\u5E93"],
+      action: () => this.plugin.dictTogglePause()
+    }, {
       name: "\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192",
       desc: UPDATE_DESC,
       aliases: ["update", "version", "\u66F4\u65B0", "\u7248\u672C", "\u63D0\u9192"],
@@ -1014,7 +2014,7 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian2.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -1024,7 +2024,7 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("\u62FC\u97F3\u663E\u793A\u4F4D\u7F6E").setDesc("\u6B63\u5728\u6253\u7684\u62FC\u97F3\u663E\u793A\u5728\u54EA\u91CC\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("\u62FC\u97F3\u663E\u793A\u4F4D\u7F6E").setDesc("\u6B63\u5728\u6253\u7684\u62FC\u97F3\u663E\u793A\u5728\u54EA\u91CC\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(PREEDIT_POSITION_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -1034,7 +2034,7 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("\u62FC\u97F3\u5206\u9694\u7B26").setDesc("\u62FC\u97F3\u97F3\u8282\u4E4B\u95F4\u7528\u4EC0\u4E48\u9694\u5F00\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName("\u62FC\u97F3\u5206\u9694\u7B26").setDesc("\u62FC\u97F3\u97F3\u8282\u4E4B\u95F4\u7528\u4EC0\u4E48\u9694\u5F00\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(PINYIN_SEPARATOR_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -1044,17 +2044,18 @@ var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192").setDesc(UPDATE_DESC).addToggle((toggle) => {
+    new import_obsidian3.Setting(containerEl).setName("\u5B8C\u6574\u8BCD\u5E93").setDesc(this.plugin.dictSummary()).addButton((button) => button.setButtonText("\u8BE6\u60C5").onClick(() => this.plugin.openDictStatus())).addButton((button) => button.setButtonText("\u7ACB\u5373\u91CD\u8BD5").onClick(() => this.plugin.dictRetry())).addButton((button) => button.setButtonText("\u6682\u505C\uFF0F\u7EE7\u7EED").onClick(() => this.plugin.dictTogglePause()));
+    new import_obsidian3.Setting(containerEl).setName("\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192").setDesc(UPDATE_DESC).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.updateCheck);
       toggle.onChange(async (value) => {
         this.plugin.settings.updateCheck = value;
         await this.plugin.saveData(this.plugin.settings);
       });
     }).addButton((button) => button.setButtonText("\u73B0\u5728\u68C0\u67E5").onClick(() => void this.plugin.checkUpdateNow()));
-    new import_obsidian2.Setting(containerEl).setName("\u6700\u8FD1\u66F4\u65B0").setDesc("\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openWhatsNew()));
+    new import_obsidian3.Setting(containerEl).setName("\u6700\u8FD1\u66F4\u65B0").setDesc("\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openWhatsNew()));
   }
 };
-var WhatsNewModal = class extends import_obsidian2.Modal {
+var WhatsNewModal = class extends import_obsidian3.Modal {
   constructor(app, notes, heading) {
     super(app);
     this.notes = notes;
@@ -1074,7 +2075,7 @@ var WhatsNewModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
-var DiagnosticsModal = class extends import_obsidian2.Modal {
+var DiagnosticsModal = class extends import_obsidian3.Modal {
   constructor(app, report, sensitive = false) {
     super(app);
     this.report = report;
@@ -1117,7 +2118,7 @@ var DiagnosticsModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
-var JustTypePlugin = class extends import_obsidian2.Plugin {
+var JustTypePlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.mode = "chinese";
@@ -1127,6 +2128,13 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.composing = false;
     /* iPad 上手指一按候选栏，编辑器就先失焦。记下按下的时刻，这之后短时间内的失焦不当成「离开」。 */
     this.panelPressAt = -Infinity;
+    this.dictListeners = /* @__PURE__ */ new Set();
+    this.dictNoticed = /* @__PURE__ */ new Set();
+    /* 引擎实际在用的词库，和下载任务的状态分开记。 */
+    this.engineDict = "base";
+    /* 这次打开里完整词库启用失败过：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
+    this.activationFailedThisRun = false;
+    this.lastCaptureAt = -Infinity;
     this.inputSequence = 0;
     this.discardThrough = 0;
     /* 活动编辑器换了就加一。异步结果带着按键时的 generation，对不上就丢弃，
@@ -1181,37 +2189,353 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.registerInputProbes();
     this.updateStatus("\u6B63\u5728\u52A0\u8F7D\u2026");
     try {
-      const t0 = Date.now();
-      const t0assets = Date.now();
-      const assets = await loadLocalAssets();
-      this.log(`\u5185\u5D4C\u8D44\u6E90\u89E3\u538B\u5B8C\u6210\uFF08${Date.now() - t0assets}ms\uFF09`);
-      this.client = new RimeWorkerClient(my_rime_worker_default, assets, (message) => this.log(message));
-      this.log(`Worker \u5DF2\u521B\u5EFA\uFF08${Date.now() - t0}ms\uFF09`);
-      const t1 = Date.now();
-      await timeout(this.client.call("setIME", "pinyin_simp"), INIT_TIMEOUT_MS, "\u52A0\u8F7D RIME \u5F15\u64CE\u4E0E\u8BCD\u5E93");
-      this.log(`setIME(pinyin_simp) \u5B8C\u6210\uFF08${Date.now() - t1}ms\uFF09`);
-      await timeout(this.client.call("setPageSize", 7), 1e4, "\u8BBE\u7F6E\u5019\u9009\u9875\u5927\u5C0F");
-      this.log("setPageSize(7) \u5B8C\u6210");
-      this.loadedDict = embeddedDictIdentity();
+      await this.openDict();
+      let client = this.dict?.canActivate() ? await this.startFullEngine() : void 0;
+      if (!client) {
+        const t0assets = Date.now();
+        const assets = await loadLocalAssets();
+        this.log(`\u5185\u5D4C\u8D44\u6E90\u89E3\u538B\u5B8C\u6210\uFF08${Date.now() - t0assets}ms\uFF09`);
+        client = await this.startEngine(assets, "\u57FA\u7840\u8BCD\u5E93");
+        this.engineDict = "base";
+        this.loadedDict = embeddedDictIdentity();
+      }
+      this.client = client;
       this.ready = true;
       this.updateStatus();
       this.log(`\u5C31\u7EEA\uFF0C\u603B\u8017\u65F6 ${Date.now() - this.startedAt}ms`);
       if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
-      else new import_obsidian2.Notice(this.readyHint());
+      else new import_obsidian3.Notice(this.readyHint());
+      this.startDictTasks();
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
       this.log(`\u521D\u59CB\u5316\u5931\u8D25\uFF1A${message}`);
       console.error("RIME initialization failed", error);
       this.updateStatus("\u52A0\u8F7D\u5931\u8D25");
-      new import_obsidian2.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
+      new import_obsidian3.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
 \u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 15e3);
     }
   }
   onunload() {
     this.setInlinePreedit(void 0, "");
+    if (this.switchTimer !== void 0) window.clearTimeout(this.switchTimer);
+    if (this.dictFrame !== void 0) window.cancelAnimationFrame(this.dictFrame);
+    this.dict?.dispose();
+    this.dictStore?.close();
+    this.dictChip?.remove();
     this.client?.destroy();
     this.panel?.remove();
+  }
+  /* ---------------- 引擎与词库 ---------------- */
+  /** 建 Worker 并加载方案。probe：加载后打一个字母看有没有候选再取消，不上屏、不写学习记录。 */
+  async startEngine(assets, label, probe = false) {
+    const t0 = Date.now();
+    const client = new RimeWorkerClient(my_rime_worker_default, assets, (message) => this.log(message));
+    try {
+      await timeout(client.call("setIME", "pinyin_simp"), INIT_TIMEOUT_MS, `\u52A0\u8F7D RIME \u5F15\u64CE\u4E0E${label}`);
+      this.log(`setIME(pinyin_simp) \u5B8C\u6210\uFF1A${label}\uFF08${Date.now() - t0}ms\uFF09`);
+      await timeout(client.call("setPageSize", 7), 1e4, "\u8BBE\u7F6E\u5019\u9009\u9875\u5927\u5C0F");
+      if (probe) {
+        const result = await timeout(client.call("process", "a"), 1e4, "\u8BCD\u5E93\u5C31\u7EEA\u68C0\u67E5");
+        await timeout(client.call("process", "{Escape}"), 1e4, "\u8BCD\u5E93\u5C31\u7EEA\u68C0\u67E5");
+        if (result.state !== 1 || !result.candidates?.length) throw new Error("\u8BCD\u5E93\u5C31\u7EEA\u68C0\u67E5\u6CA1\u6709\u5F97\u5230\u5019\u9009");
+      }
+    } catch (error) {
+      client.destroy();
+      throw error;
+    }
+    return client;
+  }
+  /** 把下载的完整词库文件放进引擎资源，替换内置的同名文件。 */
+  async fullAssets(files) {
+    const assets = await loadLocalAssets(true);
+    for (const [name, data] of files) {
+      assets.binaries[name] = data.byteLength === data.buffer.byteLength ? data.buffer : data.slice().buffer;
+    }
+    return assets;
+  }
+  /** 读本机的完整词库状态。只碰 IndexedDB，不联网；打不开就只用基础词库。 */
+  async openDict() {
+    const store = new DictStore();
+    const dict = new DictManager(store, requestUrlFetcher, CATALOG, DEFAULT_CONFIG, (message) => this.log(message));
+    try {
+      await timeout(dict.init(), 1e4, "\u8BFB\u53D6\u5B8C\u6574\u8BCD\u5E93\u72B6\u6001");
+    } catch (error) {
+      this.log(`\u5B8C\u6574\u8BCD\u5E93\u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\uFF1A${this.errorMessage(error)}`);
+      dict.dispose();
+      store.close();
+      return;
+    }
+    this.dict = dict;
+    this.dictStore = store;
+    const status = dict.status();
+    this.log(`\u5B8C\u6574\u8BCD\u5E93\u72B6\u6001\uFF1A${status.phase}\uFF0C\u5DF2\u6709 ${status.segmentsDone}/${status.segmentsTotal} \u6BB5${USING_DEV_URLS ? "\uFF08\u6D4B\u8BD5\u4E0B\u8F7D\u5730\u5740\uFF09" : ""}`);
+  }
+  /** 启动时用已装好的完整词库起引擎。取不出、校验不过或起不来都返回 undefined，由调用方改用基础词库。 */
+  async startFullEngine() {
+    const dict = this.dict;
+    const t0 = Date.now();
+    try {
+      const files = await dict.extractInstalled();
+      if (!files) {
+        this.log("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7\uFF0C\u8FD9\u6B21\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B");
+        return void 0;
+      }
+      this.log(`\u5B8C\u6574\u8BCD\u5E93\u53D6\u51FA\u5E76\u6821\u9A8C\u5B8C\u6210\uFF08${Date.now() - t0}ms\uFF09`);
+      const assets = await this.fullAssets(files);
+      await dict.beginActivation();
+      try {
+        const client = await this.startEngine(assets, "\u5B8C\u6574\u8BCD\u5E93", true);
+        await dict.endActivation(true);
+        this.engineDict = "full";
+        this.loadedDict = fullDictIdentity(dict.catalog);
+        this.noticeOnce("activated", "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528");
+        return client;
+      } catch (error) {
+        this.activationFailedThisRun = true;
+        await dict.endActivation(false, this.errorMessage(error));
+        throw error;
+      }
+    } catch (error) {
+      this.log(`\u5B8C\u6574\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6539\u7528\u57FA\u7840\u8BCD\u5E93\uFF1A${this.errorMessage(error)}`);
+      return void 0;
+    }
+  }
+  /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
+  startDictTasks() {
+    const dict = this.dict;
+    if (!dict) return;
+    this.dictChip = new DictChip(() => this.openDictStatus());
+    dict.onChange((status) => this.onDictStatus(status));
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") dict.schedule("foreground");
+    });
+    this.registerDomEvent(window, "online", () => dict.schedule("online"));
+    this.registerDomEvent(window, "resize", () => this.refreshDict());
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
+    const timer = window.setTimeout(() => dict.schedule("startup"), 3e3);
+    this.register(() => window.clearTimeout(timer));
+    this.onDictStatus(dict.status());
+  }
+  onDictStatus(status) {
+    this.refreshDict();
+    if (status.phase === "downloading" && !status.resuming) {
+      this.noticeOnce("download-started", `\u57FA\u7840\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u6B63\u5728\u540E\u53F0\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\uFF0C\u53EF\u7EE7\u7EED\u8F93\u5165\u3002`);
+    }
+    if (status.phase === "error" && status.error) {
+      this.noticeOnce(`error-${status.error.kind}`, describeDict(status, this.dictContext()).detail, 12e3);
+    }
+    this.syncEngine();
+  }
+  /** 一次性提示：同一个词库版本只提示一次，跨重启记住。 */
+  noticeOnce(key, text, duration = 8e3) {
+    const dict = this.dict;
+    if (!dict || this.dictNoticed.has(key)) return;
+    this.dictNoticed.add(key);
+    void dict.claimNotice(key).then((first) => {
+      if (first) new import_obsidian3.Notice(text, duration);
+    });
+  }
+  dictContext() {
+    return { fullLoaded: this.engineDict === "full", switching: this.switching };
+  }
+  /** 状态条和打开着的详情窗跟着刷新，一帧最多一次。 */
+  refreshDict() {
+    if (this.dictFrame !== void 0) return;
+    this.dictFrame = window.requestAnimationFrame(() => {
+      this.dictFrame = void 0;
+      const dict = this.dict;
+      if (!dict) return;
+      const view = this.activeEditor();
+      this.dictChip?.render(describeDict(dict.status(), this.dictContext()), view ? view.contentEl.getBoundingClientRect() : null);
+      for (const listener of this.dictListeners) listener();
+    });
+  }
+  /** 该用哪个词库：已下载齐、没被停用、没选只用基础词库，且这次打开里没启用失败过，就用完整词库。 */
+  wantedDict() {
+    return this.dict?.canActivate() && !this.activationFailedThisRun ? "full" : "base";
+  }
+  /** 用户停手：没有正在打的拼音或表情，2 秒内没按过键，窗口在前台。 */
+  inputIdle() {
+    return !this.composing && !this.emojiQuery && !this.engineQueue && performance.now() - this.lastCaptureAt > 2e3 && document.visibilityState === "visible";
+  }
+  /** 实际在用的和该用的不一致时，等用户停手再换。一直在打字就一直等，停下来就换。 */
+  syncEngine() {
+    if (!this.ready || this.switching || this.switchTimer !== void 0) return;
+    if (this.wantedDict() === this.engineDict) return;
+    const check = () => {
+      this.switchTimer = void 0;
+      if (!this.ready || this.switching) return;
+      const want = this.wantedDict();
+      if (want === this.engineDict) return;
+      if (!this.inputIdle()) {
+        this.switchTimer = window.setTimeout(check, 1e3);
+        return;
+      }
+      void this.switchEngine(want);
+    };
+    this.switchTimer = window.setTimeout(check, 1e3);
+  }
+  /**
+   * 换引擎。先在旧引擎照常服务时把新词库准备好（取出、校验、备份学习记录），
+   * 再用很短的时间停旧起新；这期间的按键排队，新引擎就绪后按原顺序处理。
+   * 新引擎起不来就退回基础词库。两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
+   */
+  async switchEngine(target) {
+    const dict = this.dict;
+    if (this.switching || !this.client || target === "full" && !dict) return;
+    const label = target === "full" ? "\u5B8C\u6574\u8BCD\u5E93" : "\u57FA\u7840\u8BCD\u5E93";
+    this.switching = target;
+    this.refreshDict();
+    const t0 = Date.now();
+    let assets;
+    try {
+      if (target === "full") {
+        const files = await dict.extractInstalled();
+        if (!files) throw new Error("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7");
+        assets = await this.fullAssets(files);
+        await this.backupUserDict();
+      } else {
+        assets = await loadLocalAssets();
+      }
+    } catch (error) {
+      this.log(`\u51C6\u5907\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${this.errorMessage(error)}`);
+      this.switching = void 0;
+      this.refreshDict();
+      return;
+    }
+    if (!this.inputIdle() || !this.client) {
+      this.switching = void 0;
+      this.refreshDict();
+      this.syncEngine();
+      return;
+    }
+    this.engineQueue = [];
+    const old = this.client;
+    await timeout(old.idle(), 5e3, "\u7B49\u5F85\u5F15\u64CE\u5904\u7406\u5B8C\u5728\u9014\u6309\u952E").catch(() => void 0);
+    old.destroy();
+    this.client = void 0;
+    try {
+      if (target === "full") await dict.beginActivation();
+      this.client = await this.startEngine(assets, label, target === "full");
+      this.engineDict = target;
+      this.loadedDict = target === "full" ? fullDictIdentity(dict.catalog) : embeddedDictIdentity();
+      if (target === "full") {
+        await dict.endActivation(true);
+        this.noticeOnce("activated", "\u5B8C\u6574\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u53EF\u79BB\u7EBF\u4F7F\u7528");
+      }
+      this.log(`\u5DF2\u5207\u6362\u5230${label}\uFF08\u51C6\u5907\uFF0B\u5207\u6362\u5171 ${Date.now() - t0}ms\uFF09`);
+    } catch (error) {
+      const message = this.errorMessage(error);
+      this.log(`\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${message}`);
+      if (target === "full") {
+        this.activationFailedThisRun = true;
+        await dict.endActivation(false, message);
+      }
+      if (!this.client) await this.recoverBaseEngine();
+    } finally {
+      this.switching = void 0;
+      const queued = this.engineQueue ?? [];
+      this.engineQueue = void 0;
+      for (const task of queued) task();
+      this.refreshDict();
+      this.syncEngine();
+    }
+  }
+  /** 新引擎起不来时重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
+  async recoverBaseEngine() {
+    try {
+      this.client = await this.startEngine(await loadLocalAssets(), "\u57FA\u7840\u8BCD\u5E93");
+      this.engineDict = "base";
+      this.loadedDict = embeddedDictIdentity();
+    } catch (error) {
+      const message = this.errorMessage(error);
+      this.client = void 0;
+      this.ready = false;
+      this.initError = message;
+      this.loadedDict = void 0;
+      this.log(`\u57FA\u7840\u8BCD\u5E93\u4E5F\u6CA1\u80FD\u91CD\u65B0\u52A0\u8F7D\uFF1A${message}`);
+      this.updateStatus("\u52A0\u8F7D\u5931\u8D25");
+      new import_obsidian3.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
+\u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 15e3);
+    }
+  }
+  /**
+   * 第一次换成完整词库前，把学习记录（/rime 下除 build 以外的文件）在本机备份一份。
+   * 学习记录和词库本来互不相干，换词库不会动它；这只是多一道保险，失败也不影响切换。
+   */
+  async backupUserDict() {
+    const store = this.dictStore;
+    const client = this.client;
+    if (!store || !client) return;
+    const key = "userdb-before-full";
+    try {
+      if (await store.getBackup(key)) return;
+      const files = {};
+      let bytes = 0;
+      const walk = async (dir) => {
+        for (const name of await client.call("fsOperate", "readdir", dir)) {
+          if (name === "." || name === ".." || dir === "/rime" && name === "build") continue;
+          const path = `${dir}/${name}`;
+          const stat = await client.call("fsOperate", "stat", path);
+          if (await client.call("fsOperate", "isDir", stat.mode)) {
+            await walk(path);
+            continue;
+          }
+          const data = await client.call("fsOperate", "readFile", path);
+          bytes += data.byteLength;
+          if (bytes > 5e7) throw new Error("\u5B66\u4E60\u8BB0\u5F55\u8D85\u8FC7 50 MB\uFF0C\u4E0D\u505A\u5907\u4EFD");
+          files[path] = data;
+        }
+      };
+      await walk("/rime");
+      await store.putBackup(key, { at: Date.now(), plugin: PLUGIN_VERSION, files });
+      this.log(`\u5B66\u4E60\u8BB0\u5F55\u5DF2\u5907\u4EFD\uFF1A${Object.keys(files).length} \u4E2A\u6587\u4EF6\uFF0C${bytes} B`);
+    } catch (error) {
+      this.log(`\u5B66\u4E60\u8BB0\u5F55\u5907\u4EFD\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5207\u6362\uFF09\uFF1A${this.errorMessage(error)}`);
+    }
+  }
+  /* 设置页和详情窗用的操作。 */
+  dictControls() {
+    return {
+      snapshot: () => this.dict ? { status: this.dict.status(), ctx: this.dictContext() } : void 0,
+      subscribe: (listener) => {
+        this.dictListeners.add(listener);
+        return () => this.dictListeners.delete(listener);
+      },
+      retry: () => this.dictRetry(),
+      pause: () => void this.dict?.pause(),
+      resume: () => void this.dict?.resume(),
+      setBaseOnly: (on) => {
+        if (!on) this.activationFailedThisRun = false;
+        void this.dict?.setBaseOnly(on);
+      },
+      remove: () => void this.dict?.removeDownloaded().then(() => new import_obsidian3.Notice("\u5DF2\u5220\u9664\u4E0B\u8F7D\u7684\u5B8C\u6574\u8BCD\u5E93\uFF0C\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002\u4E4B\u540E\u53EA\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u9700\u8981\u65F6\u53EF\u5728\u8BBE\u7F6E\u91CC\u6062\u590D\u3002", 8e3))
+    };
+  }
+  openDictStatus() {
+    new DictStatusModal(this.app, this.dictControls()).open();
+  }
+  dictSummary() {
+    return this.dict ? describeDict(this.dict.status(), this.dictContext()).detail : "\u8FD9\u53F0\u8BBE\u5907\u4E0A\u5B8C\u6574\u8BCD\u5E93\u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u57FA\u7840\u8BCD\u5E93\u53EF\u6B63\u5E38\u4F7F\u7528\u3002";
+  }
+  dictRetry() {
+    if (!this.dict) return;
+    this.activationFailedThisRun = false;
+    void this.dict.retryNow();
+    new import_obsidian3.Notice("\u5F00\u59CB\u91CD\u65B0\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u5DF2\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u4E0D\u4F1A\u91CD\u4E0B\u3002", 5e3);
+  }
+  dictTogglePause() {
+    const dict = this.dict;
+    if (!dict) return;
+    if (dict.status().pausedReason === "paused") {
+      void dict.resume();
+      new import_obsidian3.Notice("\u7EE7\u7EED\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\u3002", 5e3);
+    } else {
+      void dict.pause();
+      new import_obsidian3.Notice("\u5DF2\u6682\u505C\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF0C\u91CD\u5F00 Obsidian \u4E5F\u4FDD\u6301\u6682\u505C\uFF0C\u53EF\u968F\u65F6\u7EE7\u7EED\u3002", 6e3);
+    }
   }
   /* ---------------- diagnostics ---------------- */
   log(message) {
@@ -1219,8 +2543,8 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.diagnostics.push(`[+${stamp}ms] ${message}`);
   }
   environmentLine() {
-    const kind = import_obsidian2.Platform.isIosApp ? "iOS/iPadOS App" : import_obsidian2.Platform.isAndroidApp ? "Android App" : import_obsidian2.Platform.isMacOS ? "macOS \u684C\u9762" : import_obsidian2.Platform.isWin ? "Windows \u684C\u9762" : "\u5176\u5B83";
-    return `\u73AF\u5883\uFF1A${kind}\uFF5Cmobile=${import_obsidian2.Platform.isMobile}\uFF5CObsidian ${this.app.appVersion ?? "?"}`;
+    const kind = import_obsidian3.Platform.isIosApp ? "iOS/iPadOS App" : import_obsidian3.Platform.isAndroidApp ? "Android App" : import_obsidian3.Platform.isMacOS ? "macOS \u684C\u9762" : import_obsidian3.Platform.isWin ? "Windows \u684C\u9762" : "\u5176\u5B83";
+    return `\u73AF\u5883\uFF1A${kind}\uFF5Cmobile=${import_obsidian3.Platform.isMobile}\uFF5CObsidian ${this.app.appVersion ?? "?"}`;
   }
   /** Separates "the CDN is unreachable" from "the page context is not allowed to fetch it". */
   /* 被动事件探针：只记录，不改变任何行为。用于在 iPad 上看清系统键盘到底发什么事件。 */
@@ -1264,7 +2588,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.imeTookOver = true;
     if (Date.now() - this.lastImeWarnAt < IME_WARN_COOLDOWN_MS) return;
     this.lastImeWarnAt = Date.now();
-    new import_obsidian2.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u2014\u2014\u6309\u952E\u73B0\u5728\u5F52\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
+    new import_obsidian3.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u2014\u2014\u6309\u952E\u73B0\u5728\u5F52\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
   }
   describeEvent(event) {
     const input = event;
@@ -1342,10 +2666,10 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
         await this.app.vault.createFolder(REPORT_FOLDER);
       }
       const file = await this.app.vault.create(path, "```\n" + this.buildReport() + "\n```\n");
-      new import_obsidian2.Notice(`\u8BCA\u65AD\u62A5\u544A\u5DF2\u5B58\u5230 ${path}`, 8e3);
+      new import_obsidian3.Notice(`\u8BCA\u65AD\u62A5\u544A\u5DF2\u5B58\u5230 ${path}`, 8e3);
       await this.app.workspace.getLeaf(true).openFile(file);
     } catch (error) {
-      new import_obsidian2.Notice(`\u4FDD\u5B58\u8BCA\u65AD\u62A5\u544A\u5931\u8D25\uFF1A${this.errorMessage(error)}`, 8e3);
+      new import_obsidian3.Notice(`\u4FDD\u5B58\u8BCA\u65AD\u62A5\u544A\u5931\u8D25\uFF1A${this.errorMessage(error)}`, 8e3);
     }
   }
   buildReport() {
@@ -1364,6 +2688,9 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       "",
       "--- \u8BCD\u5E93\uFF08\u5F53\u524D\u5B9E\u9645\u52A0\u8F7D\uFF09---",
       ...this.loadedDict ? [`  ${this.loadedDict.label}\uFF1A${this.loadedDict.source}`, ...this.loadedDict.files.map((f) => `    ${f.name}  ${f.bytes} B  sha256 ${f.sha256}`)] : ["  \uFF08\u5F15\u64CE\u5C1A\u672A\u5C31\u7EEA\uFF0C\u6CA1\u6709\u52A0\u8F7D\u8BCD\u5E93\uFF09"],
+      "",
+      "--- \u5B8C\u6574\u8BCD\u5E93\uFF08\u540E\u53F0\u4EFB\u52A1\uFF0C\u53EA\u5728\u672C\u673A\uFF09---",
+      ...this.dictReport(),
       "",
       "--- \u5F53\u524D\u72B6\u6001 ---",
       `  \u5F15\u64CE\u5C31\u7EEA ready = ${this.ready}`,
@@ -1390,6 +2717,20 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       ...this.diagnostics
     ].join("\n");
   }
+  dictReport() {
+    const dict = this.dict;
+    if (!dict) return ["  \u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u53EA\u7528\u57FA\u7840\u8BCD\u5E93"];
+    const s = dict.status();
+    const time = (at) => at ? new Date(at).toLocaleString() : "\u65E0";
+    return [
+      `  \u76EE\u6807 ${s.catalog.id}\uFF5Ctgz ${s.catalog.tarball.bytes} B\uFF5Csha256 ${s.catalog.tarball.sha256}`,
+      `  \u4E0B\u8F7D\u5730\u5740 ${s.catalog.urls.join(" \u2192 ")}${USING_DEV_URLS ? "\uFF08\u6D4B\u8BD5\u5730\u5740\uFF09" : ""}`,
+      `  \u9636\u6BB5 ${s.phase}\uFF5C\u5DF2\u6838\u5BF9 ${s.segmentsDone}/${s.segmentsTotal} \u6BB5\uFF08${s.bytesDone}/${s.bytesTotal} B\uFF09\uFF5C\u63A5\u7740\u4E0B ${s.resuming}`,
+      `  \u6682\u505C\u610F\u56FE ${s.pausedReason ?? "\u65E0"}\uFF5C\u4E0B\u6B21\u81EA\u52A8\u91CD\u8BD5 ${time(s.nextRetryAt)}`,
+      `  \u6700\u8FD1\u9519\u8BEF ${s.error ? `${s.error.kind}\uFF1A${s.error.message}` : "\u65E0"}`,
+      `  \u5F15\u64CE\u5728\u7528 ${this.engineDict}\uFF5C\u5207\u6362\u4E2D ${this.switching ?? "\u5426"}\uFF5C\u8FD9\u6B21\u542F\u7528\u5931\u8D25\u8FC7 ${this.activationFailedThisRun}\uFF5C\u8BB0\u5F55\u7684\u542F\u7528\u7248\u672C ${s.activeId ?? "\u65E0"}`
+    ];
+  }
   /* ---------------- 新版本与更新说明 ---------------- */
   /* 不会自动消失，直到点按钮或点通知本身。这次打开里同一个版本只弹一次；下次打开还会再提醒。 */
   remindIfNewer() {
@@ -1403,7 +2744,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       actions.createEl("button", { text: "\u53BB\u66F4\u65B0", cls: "mod-cta" }).addEventListener("click", () => this.openPluginPage());
       actions.createEl("button", { text: "\u7A0D\u540E\u63D0\u9192" });
     });
-    new import_obsidian2.Notice(message, 0);
+    new import_obsidian3.Notice(message, 0);
   }
   /* 走 Obsidian 自己的插件页，由用户点「更新」完成官方流程。插件不下载、不安装自己。 */
   openPluginPage() {
@@ -1416,7 +2757,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
   showUpgradedNotice(previous) {
     const notes = this.notesSince(previous);
     if (!notes.length) {
-      new import_obsidian2.Notice(this.readyHint());
+      new import_obsidian3.Notice(this.readyHint());
       return;
     }
     const message = createFragment((f) => {
@@ -1425,7 +2766,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       box.createDiv({ cls: "just-type-update-link", text: "\u70B9\u8FD9\u91CC\u770B\u66F4\u65B0\u4E86\u4EC0\u4E48" });
       box.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} \u66F4\u65B0\u4E86\u4EC0\u4E48`).open());
     });
-    new import_obsidian2.Notice(message, 12e3);
+    new import_obsidian3.Notice(message, 12e3);
   }
   openWhatsNew() {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
@@ -1434,24 +2775,24 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
   ignorePendingUpdate() {
     const info = this.updates?.newer();
     if (!info || this.updates.isIgnored(info.version)) {
-      new import_obsidian2.Notice(`\u76EE\u524D\u6CA1\u6709\u5F85\u63D0\u9192\u7684\u65B0\u7248\u672C\uFF08\u5F53\u524D ${PLUGIN_VERSION}\uFF09\u3002`, 5e3);
+      new import_obsidian3.Notice(`\u76EE\u524D\u6CA1\u6709\u5F85\u63D0\u9192\u7684\u65B0\u7248\u672C\uFF08\u5F53\u524D ${PLUGIN_VERSION}\uFF09\u3002`, 5e3);
       return;
     }
     this.updates.ignore(info.version);
-    new import_obsidian2.Notice(`\u4E0D\u518D\u63D0\u9192 ${info.version}\u3002\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002`, 6e3);
+    new import_obsidian3.Notice(`\u4E0D\u518D\u63D0\u9192 ${info.version}\u3002\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002`, 6e3);
   }
   async checkUpdateNow() {
     if (!this.updates) return;
-    const pending = new import_obsidian2.Notice("\u6B63\u5728\u68C0\u67E5 Just Type \u65B0\u7248\u672C\u2026", 0);
+    const pending = new import_obsidian3.Notice("\u6B63\u5728\u68C0\u67E5 Just Type \u65B0\u7248\u672C\u2026", 0);
     const got = await this.updates.maybeCheck(true);
     pending.hide();
     if (!got) {
-      new import_obsidian2.Notice("\u68C0\u67E5\u5931\u8D25\uFF1A\u7F51\u7EDC\u8FDE\u4E0D\u4E0A\u7248\u672C\u4FE1\u606F\u5730\u5740\u3002\u4E0D\u5F71\u54CD\u8F93\u5165\uFF0C\u7A0D\u540E\u4F1A\u81EA\u52A8\u518D\u8BD5\u3002", 8e3);
+      new import_obsidian3.Notice("\u68C0\u67E5\u5931\u8D25\uFF1A\u7F51\u7EDC\u8FDE\u4E0D\u4E0A\u7248\u672C\u4FE1\u606F\u5730\u5740\u3002\u4E0D\u5F71\u54CD\u8F93\u5165\uFF0C\u7A0D\u540E\u4F1A\u81EA\u52A8\u518D\u8BD5\u3002", 8e3);
       return;
     }
     const info = this.updates.newer();
     if (!info) {
-      new import_obsidian2.Notice(`Just Type ${PLUGIN_VERSION} \u5DF2\u662F\u6700\u65B0\u7248\u3002`, 5e3);
+      new import_obsidian3.Notice(`Just Type ${PLUGIN_VERSION} \u5DF2\u662F\u6700\u65B0\u7248\u3002`, 5e3);
       return;
     }
     this.remindedVersion = void 0;
@@ -1485,7 +2826,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
         } else {
           this.traceRawKeys = false;
         }
-        new import_obsidian2.Notice(this.traceEnabled ? "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5F00\uFF08\u5185\u5BB9\u5DF2\u8131\u654F\uFF09\u3002\u590D\u73B0\u95EE\u9898\u540E\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u3002" : "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5173\u3002");
+        new import_obsidian3.Notice(this.traceEnabled ? "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5F00\uFF08\u5185\u5BB9\u5DF2\u8131\u654F\uFF09\u3002\u590D\u73B0\u95EE\u9898\u540E\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u3002" : "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5173\u3002");
       }
     });
     this.addCommand({
@@ -1498,13 +2839,18 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
           this.eventTrace = [];
           this.eventCounts = {};
         }
-        new import_obsidian2.Notice(this.traceRawKeys ? "\u26A0\uFE0F \u8BB0\u5F55\u5DF2\u5305\u542B\u4F60\u5B9E\u9645\u6572\u4E0B\u7684\u6309\u952E\u5185\u5BB9\uFF0C\u62A5\u544A\u5916\u53D1\u524D\u8BF7\u901A\u8BFB\u3002\u518D\u8FD0\u884C\u4E00\u6B21\u6B64\u547D\u4EE4\u53EF\u5173\u95ED\u3002" : "\u5DF2\u6062\u590D\u8131\u654F\u8BB0\u5F55\u3002", 8e3);
+        new import_obsidian3.Notice(this.traceRawKeys ? "\u26A0\uFE0F \u8BB0\u5F55\u5DF2\u5305\u542B\u4F60\u5B9E\u9645\u6572\u4E0B\u7684\u6309\u952E\u5185\u5BB9\uFF0C\u62A5\u544A\u5916\u53D1\u524D\u8BF7\u901A\u8BFB\u3002\u518D\u8FD0\u884C\u4E00\u6B21\u6B64\u547D\u4EE4\u53EF\u5173\u95ED\u3002" : "\u5DF2\u6062\u590D\u8131\u654F\u8BB0\u5F55\u3002", 8e3);
       }
     });
     this.addCommand({
       id: "save-report",
       name: "\u8BCA\u65AD\uFF1A\u628A\u62A5\u544A\u5B58\u8FDB Vault (save report)",
       callback: () => void this.saveReport()
+    });
+    this.addCommand({
+      id: "dictionary-status",
+      name: "\u5B8C\u6574\u8BCD\u5E93\u72B6\u6001 (dictionary)",
+      callback: () => this.openDictStatus()
     });
     this.addCommand({
       id: "whats-new",
@@ -1519,7 +2865,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
   }
   createControls() {
     this.ribbon = this.addRibbonIcon("languages", "Just Type\uFF1A\u5207\u6362\u4E2D\u82F1\u6587", () => this.toggle());
-    if (!import_obsidian2.Platform.isMobile) {
+    if (!import_obsidian3.Platform.isMobile) {
       this.status = this.addStatusBarItem();
       this.status.addClass("just-type-status");
       this.status.addEventListener("click", () => this.toggle());
@@ -1543,7 +2889,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
       const view = this.activeEditor();
       if (view) this.renderEmojiPanel(view);
     }
-    new import_obsidian2.Notice(`Just Type\uFF1A${MODE_NOTICE[next]}`);
+    new import_obsidian3.Notice(`Just Type\uFF1A${MODE_NOTICE[next]}`);
   }
   updateStatus(override) {
     const active = this.mode !== "english" && this.ready;
@@ -1555,7 +2901,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     if (this.ribbon) {
       this.ribbon.toggleClass("is-enabled", active);
       this.ribbon.setAttribute("aria-label", `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
-      (0, import_obsidian2.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
+      (0, import_obsidian3.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
     }
   }
   createPanel() {
@@ -1637,7 +2983,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     else if (document.activeElement !== sink.el) sink.el.focus();
   }
   activeEditor() {
-    return this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
+    return this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
   }
   skip(reason) {
     this.skipCounts[reason] = (this.skipCounts[reason] ?? 0) + 1;
@@ -1653,12 +2999,12 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
   }
   shouldCapture(event) {
     if (this.mode !== "chinese") return this.skip("\u672A\u542F\u7528");
-    if (!this.ready || !this.client) return this.skip("\u5F15\u64CE\u672A\u5C31\u7EEA");
+    if (!this.ready || !this.client && !this.engineQueue) return this.skip("\u5F15\u64CE\u672A\u5C31\u7EEA");
     if (!this.isInputTarget(event.target)) return this.skip("\u7126\u70B9\u4E0D\u5728\u7F16\u8F91\u5668");
     if (isSystemImeComposing(event)) return this.skip("\u7CFB\u7EDF\u8F93\u5165\u6CD5\u7EC4\u5408\u4E2D");
     if (event.metaKey || event.ctrlKey || event.altKey) return this.skip("\u5E26\u4FEE\u9970\u952E");
     if (event.shiftKey && event.key.length !== 1) return this.skip("\u5E26\u4FEE\u9970\u952E");
-    if (this.composing) {
+    if (this.composing || this.engineQueue?.length) {
       return /^[a-z0-9]$/i.test(event.key) || event.key in KEY_MAP ? true : this.skip("\u975E\u62FC\u97F3\u6309\u952E");
     }
     if (event.shiftKey && !START_PUNCTUATION.has(event.key)) return this.skip("\u5E26\u4FEE\u9970\u952E");
@@ -1722,7 +3068,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     if (event.key.length !== 1) return;
     if (!this.isInputTarget(event.target)) return;
     this.imeTookOver = false;
-    new import_obsidian2.Notice(this.readyHint(), 6e3);
+    new import_obsidian3.Notice(this.readyHint(), 6e3);
   }
   onKeydown(event) {
     this.toggleArmed = this.isToggleKeyAlone(event);
@@ -1753,11 +3099,23 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.pendingTrace = -1;
     const sequence = ++this.inputSequence;
     const generation = this.editorGeneration;
-    void this.client.call("process", rimeKey).then((result) => COMMA_KEYS.has(event.key) ? this.confirmComma(result) : result).then((result) => this.applyResult(result, event.key, sink, sequence, generation)).catch((error) => {
+    const key = event.key;
+    this.lastCaptureAt = performance.now();
+    this.withEngine(() => this.sendKey(rimeKey, key, sink, sequence, generation));
+  }
+  /* 正在换引擎就先排队，换好后按到达顺序执行；平时直接执行。 */
+  withEngine(task) {
+    if (this.engineQueue) this.engineQueue.push(task);
+    else task();
+  }
+  sendKey(rimeKey, key, sink, sequence, generation) {
+    const client = this.client;
+    if (!client) return;
+    void client.call("process", rimeKey).then((result) => COMMA_KEYS.has(key) ? this.confirmComma(client, result) : result).then((result) => this.applyResult(result, key, sink, sequence, generation)).catch((error) => {
       console.error("RIME input failed", error);
       this.log(`process("${rimeKey}") \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
       this.cancelComposition();
-      new import_obsidian2.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
+      new import_obsidian3.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
 \u53EF\u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 8e3);
     });
   }
@@ -1781,9 +3139,9 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     return mapped ? `{${mapped}}` : void 0;
   }
   /* / 或 \ 打开的是标点菜单：首项是「、」就立刻确认。前面若有拼音被顺带上屏，两段拼起来一起交出。 */
-  async confirmComma(result) {
+  async confirmComma(client, result) {
     if (result.state !== 1 || result.candidates?.[0]?.text !== "\u3001") return result;
-    const next = await this.client.call("process", "{space}");
+    const next = await client.call("process", "{space}");
     return { ...next, committed: `${result.committed ?? ""}${next.committed ?? ""}` };
   }
   applyResult(result, originalKey, sink, sequence, generation) {
@@ -1983,15 +3341,19 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
         this.restoreTitleFocus(sink);
         const sequence = ++this.inputSequence;
         const generation = this.editorGeneration;
-        void this.client.call("selectCandidateOnCurrentPage", index).then((raw) => {
-          this.applyResult(JSON.parse(raw), "", sink, sequence, generation);
-          this.refocus(sink);
-        }).catch((error) => {
-          console.error("RIME input failed", error);
-          this.log(`selectCandidate(${index}) \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
-          this.cancelComposition();
-          new import_obsidian2.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
+        this.withEngine(() => {
+          const client = this.client;
+          if (!client) return;
+          void client.call("selectCandidateOnCurrentPage", index).then((raw) => {
+            this.applyResult(JSON.parse(raw), "", sink, sequence, generation);
+            this.refocus(sink);
+          }).catch((error) => {
+            console.error("RIME input failed", error);
+            this.log(`selectCandidate(${index}) \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
+            this.cancelComposition();
+            new import_obsidian3.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
 \u53EF\u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 8e3);
+          });
         });
       });
     });
@@ -2020,7 +3382,7 @@ var JustTypePlugin = class extends import_obsidian2.Plugin {
     this.composing = false;
     this.discardThrough = this.inputSequence;
     this.hidePanel();
-    if (this.ready && this.client) void this.client.call("process", "{Escape}");
+    if (this.ready) this.withEngine(() => void this.client?.call("process", "{Escape}").catch(() => void 0));
   }
   hidePanel() {
     this.setInlinePreedit(void 0, "");

@@ -84,7 +84,7 @@ export function describeDict(status: DictStatus, ctx: DictUiContext): DictDescri
       const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 60_000)) : 0;
       const done = status.segmentsDone ? `已下载并核对 ${size}，会接着下。` : "";
       const detail = minutes > 5
-        ? `基础词库可正常使用，约 ${minutes} 分钟后或下次打开时自动重试。${done}${reason}`
+        ? `基础词库可正常使用，约 ${minutes} 分钟后自动重试（期间关掉再打开也会按时接着试，不用手动操作）。${done}${reason}`
         : `完整词库暂未下载完成，基础词库可正常使用，将自动重试。${done}${reason}`;
       return { chip: "完整词库 稍后重试", detail, attention: false };
     }
