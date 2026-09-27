@@ -1,7 +1,7 @@
 /**
  * 内嵌的 RIME 引擎与词库。
  *
- * 就打个字运行时不联网。引擎、引擎数据和方案文件在构建期由 scripts/fetch-assets.mjs
+ * 引擎和基础词库不在运行时下载（完整词库另见 src/dict/）。引擎、引擎数据和方案文件在构建期由 scripts/fetch-assets.mjs
  * 抓到 src/assets/，再由 esbuild 一并打进 main.js：二进制走 binary loader，
  * rime.js 走 text loader 保持原文可读。
  *
@@ -44,10 +44,14 @@ async function gunzip(data: Uint8Array): Promise<ArrayBuffer> {
   return await new Response(stream).arrayBuffer();
 }
 
-/** 解压全部内嵌资源。只在插件加载时做一次。 */
-export async function loadLocalAssets(): Promise<LocalAssets> {
+/** 内置基础词库的三个文件；用完整词库时由下载的同名文件替换。 */
+export const DICT_FILES = new Set(["pinyin_simp.table.bin", "pinyin_simp.prism.bin", "pinyin_simp.reverse.bin"]);
+
+/** 解压内嵌资源，每次起引擎时做一次。skipDict：要换成完整词库时不解压内置词库，省一份内存。 */
+export async function loadLocalAssets(skipDict = false): Promise<LocalAssets> {
   const binaries: Record<string, ArrayBuffer> = {};
   for (const [name, gz] of Object.entries(COMPRESSED)) {
+    if (skipDict && DICT_FILES.has(name)) continue;
     binaries[name] = await gunzip(gz);
   }
   return { script: rimeScript, binaries };

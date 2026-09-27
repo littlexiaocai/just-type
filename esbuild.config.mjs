@@ -11,6 +11,8 @@ await esbuild.build({
   // 发布产物不带 sourcemap：内联会把全部源码 base64 塞进 main.js，
   // 插件要装到 iPad 上，体积直接翻倍不值当。调试时加 --dev。
   sourcemap: process.argv.includes("--dev") ? "inline" : false,
-  outfile: "dist/main.js",
+  // 只在本机测试下载流程时设置 JT_DICT_URLS（逗号分隔）；正式构建不设，用 catalog.json 里的地址。
+  define: { JT_DEV_DICT_URLS: JSON.stringify(process.env.JT_DICT_URLS ? process.env.JT_DICT_URLS.split(",") : null) },
+  outfile: process.env.JT_OUTFILE || "dist/main.js",
   logLevel: "info"
 });

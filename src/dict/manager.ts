@@ -25,7 +25,13 @@ export interface DictCatalog {
   files: { name: string; bytes: number; sha256: string }[];
 }
 
-export const CATALOG = catalogJson as DictCatalog;
+/** 开发测试用：构建时设了 JT_DICT_URLS 才有值，把下载地址换成本机测试服务器。正式构建里是 null。 */
+declare const JT_DEV_DICT_URLS: string[] | null;
+const DEV_URLS = typeof JT_DEV_DICT_URLS !== "undefined" ? JT_DEV_DICT_URLS : null;
+
+const BUILT_IN: DictCatalog = catalogJson;
+export const CATALOG: DictCatalog = DEV_URLS ? { ...BUILT_IN, urls: DEV_URLS } : BUILT_IN;
+export const USING_DEV_URLS = Boolean(DEV_URLS);
 
 export type ErrorKind =
   | "offline"      // 明确离线

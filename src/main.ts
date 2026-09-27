@@ -3,6 +3,9 @@ import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
+import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictStatus } from "./dict/manager";
+import { DictStore } from "./dict/store";
+import { approxSize, describeDict, DictChip, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictControls, type DictUiContext } from "./dict/ui";
 import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
@@ -290,7 +293,17 @@ class RimeWorkerClient {
     return result;
   }
 
+  /** 等已排队的调用都处理完。换引擎前用：在途的按键和存盘先做完。 */
+  idle(): Promise<void> {
+    return this.chain.then(() => undefined);
+  }
+
   destroy(): void {
+    // 还没回来的调用立刻失败，之后的调用也直接失败：停掉的 Worker 不会再回话，不能让调用链一直挂着。
+    this.fatal ??= new Error("RIME 引擎已停止");
+    const pending = this.pending;
+    this.pending = undefined;
+    pending?.reject(this.fatal);
     this.worker.terminate();
     URL.revokeObjectURL(this.workerUrl);
     for (const url of this.assetUrls) URL.revokeObjectURL(url);
@@ -433,6 +446,21 @@ class JustTypeSettingTab extends PluginSettingTab {
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
     }, {
+      name: "完整词库",
+      desc: `${this.plugin.dictSummary()} 点这里看详情、暂停或只用基础词库。`,
+      aliases: ["dictionary", "词库", "完整词库", "下载", "雾凇", "rime-ice"],
+      action: () => this.plugin.openDictStatus()
+    }, {
+      name: "立即重试下载完整词库",
+      desc: "马上开始新一轮下载，不等自动重试。已下载并核对过的部分不会重下。",
+      aliases: ["retry", "dictionary", "重试", "词库"],
+      action: () => this.plugin.dictRetry()
+    }, {
+      name: "暂停或继续自动下载完整词库",
+      desc: "暂停后重开 Obsidian 也保持暂停，直到你点继续。已下载的部分保留。",
+      aliases: ["pause", "resume", "dictionary", "暂停", "继续", "词库"],
+      action: () => this.plugin.dictTogglePause()
+    }, {
       name: "有新版本时提醒",
       desc: UPDATE_DESC,
       aliases: ["update", "version", "更新", "版本", "提醒"],
@@ -500,6 +528,13 @@ class JustTypeSettingTab extends PluginSettingTab {
           await this.plugin.saveData(this.plugin.settings);
         });
       });
+
+    new Setting(containerEl)
+      .setName("完整词库")
+      .setDesc(this.plugin.dictSummary())
+      .addButton((button) => button.setButtonText("详情").onClick(() => this.plugin.openDictStatus()))
+      .addButton((button) => button.setButtonText("立即重试").onClick(() => this.plugin.dictRetry()))
+      .addButton((button) => button.setButtonText("暂停／继续").onClick(() => this.plugin.dictTogglePause()));
 
     new Setting(containerEl)
       .setName("有新版本时提醒")
@@ -604,6 +639,22 @@ export default class JustTypePlugin extends Plugin {
   private updates?: UpdateChecker;
   /* 引擎实际加载的词库（不是用户选的档位或下载目标）。引擎就绪后才有值。 */
   private loadedDict?: DictIdentity;
+  /* 完整词库：后台下载任务和它在本机的存储。存储打不开（极少见）时为空，只用基础词库。 */
+  private dict?: DictManager;
+  private dictStore?: DictStore;
+  private dictChip?: DictChip;
+  private dictListeners = new Set<() => void>();
+  private dictFrame?: number;
+  private dictNoticed = new Set<string>();
+  /* 引擎实际在用的词库，和下载任务的状态分开记。 */
+  private engineDict: "base" | "full" = "base";
+  /* 换引擎期间到来的按键，按到达顺序排队，新引擎（或退回的基础引擎）就绪后依次交给它。 */
+  private engineQueue?: (() => void)[];
+  private switching?: "base" | "full";
+  private switchTimer?: number;
+  /* 这次打开里完整词库启用失败过：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
+  private activationFailedThisRun = false;
+  private lastCaptureAt = -Infinity;
   /* 这次启动已经提醒过的版本：同一次打开里不重复弹。 */
   private remindedVersion?: string;
   private upgradedFrom?: string;
@@ -666,27 +717,24 @@ export default class JustTypePlugin extends Plugin {
     this.updateStatus("正在加载…");
 
     try {
-      const t0 = Date.now();
-      const t0assets = Date.now();
-      const assets = await loadLocalAssets();
-      this.log(`内嵌资源解压完成（${Date.now() - t0assets}ms）`);
-
-      this.client = new RimeWorkerClient(workerSource, assets, (message) => this.log(message));
-      this.log(`Worker 已创建（${Date.now() - t0}ms）`);
-
-      const t1 = Date.now();
-      await timeout(this.client.call<void>("setIME", "pinyin_simp"), INIT_TIMEOUT_MS, "加载 RIME 引擎与词库");
-      this.log(`setIME(pinyin_simp) 完成（${Date.now() - t1}ms）`);
-
-      await timeout(this.client.call<void>("setPageSize", 7), 10000, "设置候选页大小");
-      this.log("setPageSize(7) 完成");
-
-      this.loadedDict = embeddedDictIdentity();
+      // 只读本机状态、不联网：已经装好完整词库就直接用它，否则先用基础词库。
+      await this.openDict();
+      let client = this.dict?.canActivate() ? await this.startFullEngine() : undefined;
+      if (!client) {
+        const t0assets = Date.now();
+        const assets = await loadLocalAssets();
+        this.log(`内嵌资源解压完成（${Date.now() - t0assets}ms）`);
+        client = await this.startEngine(assets, "基础词库");
+        this.engineDict = "base";
+        this.loadedDict = embeddedDictIdentity();
+      }
+      this.client = client;
       this.ready = true;
       this.updateStatus();
       this.log(`就绪，总耗时 ${Date.now() - this.startedAt}ms`);
       if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
       else new Notice(this.readyHint());
+      this.startDictTasks();
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
@@ -699,8 +747,350 @@ export default class JustTypePlugin extends Plugin {
 
   onunload(): void {
     this.setInlinePreedit(undefined, "");
+    if (this.switchTimer !== undefined) window.clearTimeout(this.switchTimer);
+    if (this.dictFrame !== undefined) window.cancelAnimationFrame(this.dictFrame);
+    this.dict?.dispose();
+    this.dictStore?.close();
+    this.dictChip?.remove();
     this.client?.destroy();
     this.panel?.remove();
+  }
+
+  /* ---------------- 引擎与词库 ---------------- */
+
+  /** 建 Worker 并加载方案。probe：加载后打一个字母看有没有候选再取消，不上屏、不写学习记录。 */
+  private async startEngine(assets: LocalAssets, label: string, probe = false): Promise<RimeWorkerClient> {
+    const t0 = Date.now();
+    const client = new RimeWorkerClient(workerSource, assets, (message) => this.log(message));
+    try {
+      await timeout(client.call<void>("setIME", "pinyin_simp"), INIT_TIMEOUT_MS, `加载 RIME 引擎与${label}`);
+      this.log(`setIME(pinyin_simp) 完成：${label}（${Date.now() - t0}ms）`);
+      await timeout(client.call<void>("setPageSize", 7), 10000, "设置候选页大小");
+      if (probe) {
+        const result = await timeout(client.call<RimeResult>("process", "a"), 10000, "词库就绪检查");
+        await timeout(client.call<RimeResult>("process", "{Escape}"), 10000, "词库就绪检查");
+        if (result.state !== 1 || !result.candidates?.length) throw new Error("词库就绪检查没有得到候选");
+      }
+    } catch (error) {
+      client.destroy();
+      throw error;
+    }
+    return client;
+  }
+
+  /** 把下载的完整词库文件放进引擎资源，替换内置的同名文件。 */
+  private async fullAssets(files: Map<string, Uint8Array>): Promise<LocalAssets> {
+    const assets = await loadLocalAssets(true);
+    for (const [name, data] of files) {
+      assets.binaries[name] = data.byteLength === data.buffer.byteLength ? data.buffer as ArrayBuffer : data.slice().buffer;
+    }
+    return assets;
+  }
+
+  /** 读本机的完整词库状态。只碰 IndexedDB，不联网；打不开就只用基础词库。 */
+  private async openDict(): Promise<void> {
+    const store = new DictStore();
+    const dict = new DictManager(store, requestUrlFetcher, CATALOG, DEFAULT_CONFIG, (message) => this.log(message));
+    try {
+      await timeout(dict.init(), 10000, "读取完整词库状态");
+    } catch (error) {
+      this.log(`完整词库存储不可用，只用基础词库：${this.errorMessage(error)}`);
+      dict.dispose();
+      store.close();
+      return;
+    }
+    this.dict = dict;
+    this.dictStore = store;
+    const status = dict.status();
+    this.log(`完整词库状态：${status.phase}，已有 ${status.segmentsDone}/${status.segmentsTotal} 段${USING_DEV_URLS ? "（测试下载地址）" : ""}`);
+  }
+
+  /** 启动时用已装好的完整词库起引擎。取不出、校验不过或起不来都返回 undefined，由调用方改用基础词库。 */
+  private async startFullEngine(): Promise<RimeWorkerClient | undefined> {
+    const dict = this.dict!;
+    const t0 = Date.now();
+    try {
+      const files = await dict.extractInstalled();
+      if (!files) {
+        this.log("完整词库校验未通过，这次用基础词库，稍后自动补下");
+        return undefined;
+      }
+      this.log(`完整词库取出并校验完成（${Date.now() - t0}ms）`);
+      const assets = await this.fullAssets(files);
+      await dict.beginActivation();
+      try {
+        const client = await this.startEngine(assets, "完整词库", true);
+        await dict.endActivation(true);
+        this.engineDict = "full";
+        this.loadedDict = fullDictIdentity(dict.catalog);
+        this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
+        return client;
+      } catch (error) {
+        this.activationFailedThisRun = true;
+        await dict.endActivation(false, this.errorMessage(error));
+        throw error;
+      }
+    } catch (error) {
+      this.log(`完整词库启用失败，改用基础词库：${this.errorMessage(error)}`);
+      return undefined;
+    }
+  }
+
+  /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
+  private startDictTasks(): void {
+    const dict = this.dict;
+    if (!dict) return;
+    this.dictChip = new DictChip(() => this.openDictStatus());
+    dict.onChange((status) => this.onDictStatus(status));
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") dict.schedule("foreground");
+    });
+    this.registerDomEvent(window, "online", () => dict.schedule("online"));
+    this.registerDomEvent(window, "resize", () => this.refreshDict());
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
+    // 让基础输入先稳下来，不和打开软件时的第一波输入抢资源。
+    const timer = window.setTimeout(() => dict.schedule("startup"), 3000);
+    this.register(() => window.clearTimeout(timer));
+    // 启动时已经是需要提示的状态（例如上次启用失败被停用）：按同样的规则处理一遍。
+    this.onDictStatus(dict.status());
+  }
+
+  private onDictStatus(status: DictStatus): void {
+    this.refreshDict();
+    if (status.phase === "downloading" && !status.resuming) {
+      this.noticeOnce("download-started", `基础词库已就绪，正在后台下载完整词库（${approxSize(status.catalog)}），可继续输入。`);
+    }
+    if (status.phase === "error" && status.error) {
+      this.noticeOnce(`error-${status.error.kind}`, describeDict(status, this.dictContext()).detail, 12000);
+    }
+    this.syncEngine();
+  }
+
+  /** 一次性提示：同一个词库版本只提示一次，跨重启记住。 */
+  private noticeOnce(key: string, text: string, duration = 8000): void {
+    const dict = this.dict;
+    if (!dict || this.dictNoticed.has(key)) return;
+    this.dictNoticed.add(key);
+    void dict.claimNotice(key).then((first) => {
+      if (first) new Notice(text, duration);
+    });
+  }
+
+  private dictContext(): DictUiContext {
+    return { fullLoaded: this.engineDict === "full", switching: this.switching };
+  }
+
+  /** 状态条和打开着的详情窗跟着刷新，一帧最多一次。 */
+  private refreshDict(): void {
+    if (this.dictFrame !== undefined) return;
+    this.dictFrame = window.requestAnimationFrame(() => {
+      this.dictFrame = undefined;
+      const dict = this.dict;
+      if (!dict) return;
+      const view = this.activeEditor();
+      this.dictChip?.render(describeDict(dict.status(), this.dictContext()), view ? view.contentEl.getBoundingClientRect() : null);
+      for (const listener of this.dictListeners) listener();
+    });
+  }
+
+  /** 该用哪个词库：已下载齐、没被停用、没选只用基础词库，且这次打开里没启用失败过，就用完整词库。 */
+  private wantedDict(): "base" | "full" {
+    return this.dict?.canActivate() && !this.activationFailedThisRun ? "full" : "base";
+  }
+
+  /** 用户停手：没有正在打的拼音或表情，2 秒内没按过键，窗口在前台。 */
+  private inputIdle(): boolean {
+    return !this.composing && !this.emojiQuery && !this.engineQueue
+      && performance.now() - this.lastCaptureAt > 2000 && document.visibilityState === "visible";
+  }
+
+  /** 实际在用的和该用的不一致时，等用户停手再换。一直在打字就一直等，停下来就换。 */
+  private syncEngine(): void {
+    if (!this.ready || this.switching || this.switchTimer !== undefined) return;
+    if (this.wantedDict() === this.engineDict) return;
+    const check = (): void => {
+      this.switchTimer = undefined;
+      if (!this.ready || this.switching) return;
+      const want = this.wantedDict();
+      if (want === this.engineDict) return;
+      if (!this.inputIdle()) {
+        this.switchTimer = window.setTimeout(check, 1000);
+        return;
+      }
+      void this.switchEngine(want);
+    };
+    this.switchTimer = window.setTimeout(check, 1000);
+  }
+
+  /**
+   * 换引擎。先在旧引擎照常服务时把新词库准备好（取出、校验、备份学习记录），
+   * 再用很短的时间停旧起新；这期间的按键排队，新引擎就绪后按原顺序处理。
+   * 新引擎起不来就退回基础词库。两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
+   */
+  private async switchEngine(target: "base" | "full"): Promise<void> {
+    const dict = this.dict;
+    if (this.switching || !this.client || (target === "full" && !dict)) return;
+    const label = target === "full" ? "完整词库" : "基础词库";
+    this.switching = target;
+    this.refreshDict();
+    const t0 = Date.now();
+
+    let assets: LocalAssets;
+    try {
+      if (target === "full") {
+        const files = await dict!.extractInstalled();
+        if (!files) throw new Error("完整词库校验未通过");
+        assets = await this.fullAssets(files);
+        await this.backupUserDict();
+      } else {
+        assets = await loadLocalAssets();
+      }
+    } catch (error) {
+      this.log(`准备切换到${label}失败：${this.errorMessage(error)}`);
+      this.switching = undefined;
+      this.refreshDict();
+      return;
+    }
+    // 准备期间用户又开始打字了：这次不换，等下一次停手。
+    if (!this.inputIdle() || !this.client) {
+      this.switching = undefined;
+      this.refreshDict();
+      this.syncEngine();
+      return;
+    }
+
+    this.engineQueue = [];
+    const old = this.client;
+    await timeout(old.idle(), 5000, "等待引擎处理完在途按键").catch(() => undefined);
+    old.destroy();
+    this.client = undefined;
+    try {
+      if (target === "full") await dict!.beginActivation();
+      this.client = await this.startEngine(assets, label, target === "full");
+      this.engineDict = target;
+      this.loadedDict = target === "full" ? fullDictIdentity(dict!.catalog) : embeddedDictIdentity();
+      if (target === "full") {
+        await dict!.endActivation(true);
+        this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
+      }
+      this.log(`已切换到${label}（准备＋切换共 ${Date.now() - t0}ms）`);
+    } catch (error) {
+      const message = this.errorMessage(error);
+      this.log(`切换到${label}失败：${message}`);
+      if (target === "full") {
+        this.activationFailedThisRun = true;
+        await dict!.endActivation(false, message);
+      }
+      if (!this.client) await this.recoverBaseEngine();
+    } finally {
+      this.switching = undefined;
+      const queued = this.engineQueue ?? [];
+      this.engineQueue = undefined;
+      for (const task of queued) task();
+      this.refreshDict();
+      this.syncEngine();
+    }
+  }
+
+  /** 新引擎起不来时重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
+  private async recoverBaseEngine(): Promise<void> {
+    try {
+      this.client = await this.startEngine(await loadLocalAssets(), "基础词库");
+      this.engineDict = "base";
+      this.loadedDict = embeddedDictIdentity();
+    } catch (error) {
+      const message = this.errorMessage(error);
+      this.client = undefined;
+      this.ready = false;
+      this.initError = message;
+      this.loadedDict = undefined;
+      this.log(`基础词库也没能重新加载：${message}`);
+      this.updateStatus("加载失败");
+      new Notice(`Just Type 加载失败：${message}\n运行命令「诊断报告 (report)」查看详情`, 15000);
+    }
+  }
+
+  /**
+   * 第一次换成完整词库前，把学习记录（/rime 下除 build 以外的文件）在本机备份一份。
+   * 学习记录和词库本来互不相干，换词库不会动它；这只是多一道保险，失败也不影响切换。
+   */
+  private async backupUserDict(): Promise<void> {
+    const store = this.dictStore;
+    const client = this.client;
+    if (!store || !client) return;
+    const key = "userdb-before-full";
+    try {
+      if (await store.getBackup(key)) return;
+      const files: Record<string, Uint8Array> = {};
+      let bytes = 0;
+      const walk = async (dir: string): Promise<void> => {
+        for (const name of await client.call<string[]>("fsOperate", "readdir", dir)) {
+          if (name === "." || name === ".." || (dir === "/rime" && name === "build")) continue;
+          const path = `${dir}/${name}`;
+          const stat = await client.call<{ mode: number }>("fsOperate", "stat", path);
+          if (await client.call<boolean>("fsOperate", "isDir", stat.mode)) {
+            await walk(path);
+            continue;
+          }
+          const data = await client.call<Uint8Array>("fsOperate", "readFile", path);
+          bytes += data.byteLength;
+          if (bytes > 50e6) throw new Error("学习记录超过 50 MB，不做备份");
+          files[path] = data;
+        }
+      };
+      await walk("/rime");
+      await store.putBackup(key, { at: Date.now(), plugin: PLUGIN_VERSION, files });
+      this.log(`学习记录已备份：${Object.keys(files).length} 个文件，${bytes} B`);
+    } catch (error) {
+      this.log(`学习记录备份失败（不影响切换）：${this.errorMessage(error)}`);
+    }
+  }
+
+  /* 设置页和详情窗用的操作。 */
+  private dictControls(): DictControls {
+    return {
+      snapshot: () => (this.dict ? { status: this.dict.status(), ctx: this.dictContext() } : undefined),
+      subscribe: (listener) => {
+        this.dictListeners.add(listener);
+        return () => this.dictListeners.delete(listener);
+      },
+      retry: () => this.dictRetry(),
+      pause: () => void this.dict?.pause(),
+      resume: () => void this.dict?.resume(),
+      setBaseOnly: (on) => {
+        if (!on) this.activationFailedThisRun = false;
+        void this.dict?.setBaseOnly(on);
+      },
+      remove: () => void this.dict?.removeDownloaded().then(() => new Notice("已删除下载的完整词库，学习记录不受影响。之后只用基础词库，需要时可在设置里恢复。", 8000))
+    };
+  }
+
+  openDictStatus(): void {
+    new DictStatusModal(this.app, this.dictControls()).open();
+  }
+
+  dictSummary(): string {
+    return this.dict ? describeDict(this.dict.status(), this.dictContext()).detail : "这台设备上完整词库存储不可用，基础词库可正常使用。";
+  }
+
+  dictRetry(): void {
+    if (!this.dict) return;
+    this.activationFailedThisRun = false;
+    void this.dict.retryNow();
+    new Notice("开始重新下载完整词库，已核对过的部分不会重下。", 5000);
+  }
+
+  dictTogglePause(): void {
+    const dict = this.dict;
+    if (!dict) return;
+    if (dict.status().pausedReason === "paused") {
+      void dict.resume();
+      new Notice("继续下载完整词库。", 5000);
+    } else {
+      void dict.pause();
+      new Notice("已暂停下载完整词库，重开 Obsidian 也保持暂停，可随时继续。", 6000);
+    }
   }
 
   /* ---------------- diagnostics ---------------- */
@@ -897,6 +1287,9 @@ export default class JustTypePlugin extends Plugin {
         ? [`  ${this.loadedDict.label}：${this.loadedDict.source}`, ...this.loadedDict.files.map((f) => `    ${f.name}  ${f.bytes} B  sha256 ${f.sha256}`)]
         : ["  （引擎尚未就绪，没有加载词库）"]),
       "",
+      "--- 完整词库（后台任务，只在本机）---",
+      ...this.dictReport(),
+      "",
       "--- 当前状态 ---",
       `  引擎就绪 ready = ${this.ready}`,
       `  输入模式 mode = ${this.mode}`,
@@ -921,6 +1314,21 @@ export default class JustTypePlugin extends Plugin {
       "--- 初始化过程 ---",
       ...this.diagnostics
     ].join("\n");
+  }
+
+  private dictReport(): string[] {
+    const dict = this.dict;
+    if (!dict) return ["  存储不可用，只用基础词库"];
+    const s = dict.status();
+    const time = (at?: number): string => (at ? new Date(at).toLocaleString() : "无");
+    return [
+      `  目标 ${s.catalog.id}｜tgz ${s.catalog.tarball.bytes} B｜sha256 ${s.catalog.tarball.sha256}`,
+      `  下载地址 ${s.catalog.urls.join(" → ")}${USING_DEV_URLS ? "（测试地址）" : ""}`,
+      `  阶段 ${s.phase}｜已核对 ${s.segmentsDone}/${s.segmentsTotal} 段（${s.bytesDone}/${s.bytesTotal} B）｜接着下 ${s.resuming}`,
+      `  暂停意图 ${s.pausedReason ?? "无"}｜下次自动重试 ${time(s.nextRetryAt)}`,
+      `  最近错误 ${s.error ? `${s.error.kind}：${s.error.message}` : "无"}`,
+      `  引擎在用 ${this.engineDict}｜切换中 ${this.switching ?? "否"}｜这次启用失败过 ${this.activationFailedThisRun}｜记录的启用版本 ${s.activeId ?? "无"}`
+    ];
   }
 
   /* ---------------- 新版本与更新说明 ---------------- */
@@ -1053,6 +1461,11 @@ export default class JustTypePlugin extends Plugin {
       id: "save-report",
       name: "诊断：把报告存进 Vault (save report)",
       callback: () => void this.saveReport()
+    });
+    this.addCommand({
+      id: "dictionary-status",
+      name: "完整词库状态 (dictionary)",
+      callback: () => this.openDictStatus()
     });
     this.addCommand({
       id: "whats-new",
@@ -1223,14 +1636,15 @@ export default class JustTypePlugin extends Plugin {
 
   private shouldCapture(event: KeyboardEvent): boolean {
     if (this.mode !== "chinese") return this.skip("未启用");
-    if (!this.ready || !this.client) return this.skip("引擎未就绪");
+    if (!this.ready || (!this.client && !this.engineQueue)) return this.skip("引擎未就绪");
     if (!this.isInputTarget(event.target)) return this.skip("焦点不在编辑器");
     // The system IME is still composing (it was left on a Chinese layout). Letting
     // RIME also consume the key commits the same word twice.
     if (isSystemImeComposing(event)) return this.skip("系统输入法组合中");
     if (event.metaKey || event.ctrlKey || event.altKey) return this.skip("带修饰键");
     if (event.shiftKey && event.key.length !== 1) return this.skip("带修饰键");
-    if (this.composing) {
+    // 换引擎时排着队的键还没交给引擎，组字状态未知：按「正在组字」对待，空格、数字、退格才不会漏进正文。
+    if (this.composing || this.engineQueue?.length) {
       return /^[a-z0-9]$/i.test(event.key) || event.key in KEY_MAP ? true : this.skip("非拼音按键");
     }
     // ？！：要按 Shift 才打得出来，不能一律当修饰键放行；Shift＋字母仍放给系统（大写字母）。
@@ -1340,9 +1754,23 @@ export default class JustTypePlugin extends Plugin {
 
     const sequence = ++this.inputSequence;
     const generation = this.editorGeneration;
-    void this.client!.call<RimeResult>("process", rimeKey)
-      .then((result) => COMMA_KEYS.has(event.key) ? this.confirmComma(result) : result)
-      .then((result) => this.applyResult(result, event.key, sink, sequence, generation))
+    const key = event.key;
+    this.lastCaptureAt = performance.now();
+    this.withEngine(() => this.sendKey(rimeKey, key, sink, sequence, generation));
+  }
+
+  /* 正在换引擎就先排队，换好后按到达顺序执行；平时直接执行。 */
+  private withEngine(task: () => void): void {
+    if (this.engineQueue) this.engineQueue.push(task);
+    else task();
+  }
+
+  private sendKey(rimeKey: string, key: string, sink: InputSink, sequence: number, generation: number): void {
+    const client = this.client;
+    if (!client) return;
+    void client.call<RimeResult>("process", rimeKey)
+      .then((result) => COMMA_KEYS.has(key) ? this.confirmComma(client, result) : result)
+      .then((result) => this.applyResult(result, key, sink, sequence, generation))
       .catch((error) => {
         console.error("RIME input failed", error);
         this.log(`process("${rimeKey}") 失败：${this.errorMessage(error)}`);
@@ -1375,9 +1803,9 @@ export default class JustTypePlugin extends Plugin {
   }
 
   /* / 或 \ 打开的是标点菜单：首项是「、」就立刻确认。前面若有拼音被顺带上屏，两段拼起来一起交出。 */
-  private async confirmComma(result: RimeResult): Promise<RimeResult> {
+  private async confirmComma(client: RimeWorkerClient, result: RimeResult): Promise<RimeResult> {
     if (result.state !== 1 || result.candidates?.[0]?.text !== "、") return result;
-    const next = await this.client!.call<RimeResult>("process", "{space}");
+    const next = await client.call<RimeResult>("process", "{space}");
     return { ...next, committed: `${result.committed ?? ""}${next.committed ?? ""}` };
   }
 
@@ -1615,17 +2043,21 @@ export default class JustTypePlugin extends Plugin {
         this.restoreTitleFocus(sink);
         const sequence = ++this.inputSequence;
         const generation = this.editorGeneration;
-        void this.client!.call<string>("selectCandidateOnCurrentPage", index)
-          .then((raw) => {
-            this.applyResult(JSON.parse(raw) as RimeResult, "", sink, sequence, generation);
-            this.refocus(sink);
-          })
-          .catch((error) => {
-            console.error("RIME input failed", error);
-            this.log(`selectCandidate(${index}) 失败：${this.errorMessage(error)}`);
-            this.cancelComposition();
-            new Notice(`Just Type 输入失败：${this.errorMessage(error)}\n可运行命令「诊断报告 (report)」查看详情`, 8000);
-          });
+        this.withEngine(() => {
+          const client = this.client;
+          if (!client) return;
+          void client.call<string>("selectCandidateOnCurrentPage", index)
+            .then((raw) => {
+              this.applyResult(JSON.parse(raw) as RimeResult, "", sink, sequence, generation);
+              this.refocus(sink);
+            })
+            .catch((error) => {
+              console.error("RIME input failed", error);
+              this.log(`selectCandidate(${index}) 失败：${this.errorMessage(error)}`);
+              this.cancelComposition();
+              new Notice(`Just Type 输入失败：${this.errorMessage(error)}\n可运行命令「诊断报告 (report)」查看详情`, 8000);
+            });
+        });
       });
     });
     const anchor = sink.kind === "title"
@@ -1660,7 +2092,7 @@ export default class JustTypePlugin extends Plugin {
     this.composing = false;
     this.discardThrough = this.inputSequence;
     this.hidePanel();
-    if (this.ready && this.client) void this.client.call<RimeResult>("process", "{Escape}");
+    if (this.ready) this.withEngine(() => void this.client?.call<RimeResult>("process", "{Escape}").catch(() => undefined));
   }
 
   private hidePanel(): void {

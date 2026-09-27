@@ -105,11 +105,15 @@ Default traces are **redacted**: `key=<letter>` / `code=<letter key>` / `kc=<con
 
 ## Network use · 联网说明
 
-Typing is fully offline: the Pinyin engine and dictionary ship with the plugin, and nothing is fetched while you type.
-The only network access is the optional **update reminder**. At most once every 24 hours it reads the latest version number and a one-line summary from `registry.npmmirror.com`, falling back to `cdn.jsdelivr.net` and then `api.github.com`. No data about you or your vault is sent. Turn it off in settings with **有新版本时提醒**. Updates are always installed by you through Obsidian's own plugin page; the plugin never downloads or installs itself.
+Typing never waits for the network: the Pinyin engine and a base dictionary ship with the plugin, and nothing is fetched while you type. The plugin makes two kinds of requests:
 
-输入过程完全离线：拼音引擎和词库都随插件提供，打字时不联网。
-唯一的联网行为是可选的**有新版本时提醒**：每 24 小时最多一次，从 `registry.npmmirror.com` 读取最新版本号和一句更新要点，失败时依次尝试 `cdn.jsdelivr.net`、`api.github.com`。不发送任何关于你或你的笔记的数据。可在设置里关闭「有新版本时提醒」。更新始终由你在 Obsidian 插件页自己完成，插件不会自己下载或安装自己。
+1. **Full dictionary (one-time download, about 26 MB).** After the base dictionary is ready, the plugin downloads a larger dictionary in the background, from `registry.npmmirror.com` (reachable in mainland China), falling back to `registry.npmjs.org`. It is the npm package [`just-type-dict`](https://www.npmjs.com/package/just-type-dict): compiled dictionary data from [rime-ice](https://github.com/iDvel/rime-ice) (GPL-3.0), no code. Every 2 MB segment and every file is checked against SHA-256 values built into the plugin before use. It is stored only on this device (not synced by Obsidian Sync) and then works offline. Switching dictionaries does not touch what the input method has learned from you. You can pause, keep only the base dictionary, or delete the download in settings under **完整词库**. Nothing about you or your notes is sent.
+2. **Update reminder (optional).** At most once every 24 hours it reads the latest version number and a one-line summary from `registry.npmmirror.com`, falling back to `cdn.jsdelivr.net` and then `api.github.com`. Turn it off with **有新版本时提醒**. Updates are always installed by you through Obsidian's own plugin page; the plugin never downloads or installs its own code.
+
+打字从不等网络：拼音引擎和基础词库随插件提供，打字时不联网。插件只有两类联网：
+
+1. **完整词库（一次性下载，约 26 MB）**：基础词库就绪后在后台自动下载更大的词库，来源 `registry.npmmirror.com`（国内可直接访问），备用 `registry.npmjs.org`。它是 npm 包 [`just-type-dict`](https://www.npmjs.com/package/just-type-dict)，内容是由[雾凇拼音](https://github.com/iDvel/rime-ice)（GPL-3.0）编译的词库数据，不含任何代码。每 2 MB 一段、每个文件都先和插件内置的 SHA-256 核对才会使用。只存在这台设备上（不随 Obsidian Sync 同步），下载后离线可用。换词库不影响输入法记住的你的用词习惯。可在设置「完整词库」里暂停、只用基础词库或删除已下载的数据。不发送任何关于你或你的笔记的数据。
+2. **有新版本时提醒（可关闭）**：每 24 小时最多一次，从 `registry.npmmirror.com` 读取最新版本号和一句更新要点，失败时依次尝试 `cdn.jsdelivr.net`、`api.github.com`。可在设置里关闭「有新版本时提醒」。更新始终由你在 Obsidian 插件页自己完成，插件不会自己下载或安装自己的代码。
 
 ## Feedback
 
@@ -132,9 +136,10 @@ If you can, include your iPad model, iPadOS version, Obsidian version, and a scr
 
 就打个字以 **AGPL-3.0-or-later** 发布，与其内嵌的 My RIME 一致。
 
-输入所需的引擎和词库都随插件提供、不在运行时下载，这意味着仓库和每个 Release 都在再分发第三方作品。完整清单、版本与许可证见 `THIRD_PARTY_NOTICES.md`；构建期的抓取过程见 `UPSTREAM.md`。主要的两块：
+引擎和基础词库随插件提供，这意味着仓库和每个 Release 都在再分发第三方作品；完整词库是单独发布的数据包，插件运行时下载。完整清单、版本与许可证见 `THIRD_PARTY_NOTICES.md`；构建期的抓取过程见 `UPSTREAM.md`。主要的几块：
 
 | 组件 | 许可证 |
 |---|---|
 | My RIME 0.10.9（Worker、引擎、引擎数据） | AGPL-3.0-or-later |
-| rime-pinyin-simp 方案（已裁掉笔画反查） | Apache-2.0 |
+| rime-pinyin-simp 方案与基础词库（已裁掉笔画反查） | Apache-2.0 |
+| 完整词库 `just-type-dict`（雾凇拼音编译，运行时下载） | GPL-3.0 |
