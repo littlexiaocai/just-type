@@ -75,7 +75,7 @@ export function describeDict(status: DictStatus, ctx: DictUiContext): DictDescri
     case "downloading":
       return {
         chip: `完整词库 ${size}`,
-        detail: `正在后台下载完整词库：${size}。可继续输入，基础词库照常工作。`
+        detail: `正在后台从 ${status.source} 下载完整词库：${size}。可继续输入，基础词库照常工作。国内源慢时会自动改从国外源下。`
           + (status.resuming ? "接着上次已下载并核对过的部分继续，不从头重下。" : ""),
         attention: false
       };

@@ -64,6 +64,8 @@ export interface DictStatus {
   resuming: boolean;
   /** 另一个 Obsidian 窗口正在下载，这里等它下完直接用。 */
   elsewhere: boolean;
+  /** 现在从哪个下载源下（主机名）。 */
+  source: string;
   /** 最近的下载事件（跨重启保留），供诊断报告。 */
   history: string[];
 }
@@ -93,6 +95,10 @@ export interface DictConfig {
   offlineProbeSlowMs: number;
   /** 试探请求的超时。 */
   probeTimeoutMs: number;
+  /** 一段超过这么久还没下完（慢于约 200 KB/s），就同时向另一个下载源要同一段，谁先到用谁。 */
+  slowSegmentMs: number;
+  /** 一次下载任务里最多这样「两边同时要」几次，避免网络本身慢时白白多花流量。 */
+  maxHedges: number;
 }
 
 export const DEFAULT_CONFIG: DictConfig = {
@@ -105,7 +111,9 @@ export const DEFAULT_CONFIG: DictConfig = {
   activationFailureLimit: 2,
   offlineProbeMs: 5_000,
   offlineProbeSlowMs: 60_000,
-  probeTimeoutMs: 10_000
+  probeTimeoutMs: 10_000,
+  slowSegmentMs: 10_000,
+  maxHedges: 3
 };
 
 interface PersistedState {
@@ -130,6 +138,18 @@ interface PersistedState {
 const HISTORY_LIMIT = 60;
 /** 浏览器自带的锁：持有它的页面或进程一结束就自动释放。 */
 const WEB_LOCK = "just-type-dict-task";
+
+function hostOf(url: string): string {
+  const m = /^https?:\/\/([^/]+)/.exec(url);
+  return m ? m[1].replace(/^registry\./, "") : url;
+}
+
+/** 一段数据的来源与内容；full＝服务器不支持分段、直接给了整包。 */
+interface SegmentResult {
+  src: number;
+  body: ArrayBuffer;
+  full: boolean;
+}
 
 function stamp(at: number): string {
   const d = new Date(at);
@@ -176,6 +196,11 @@ export class DictManager {
   private backingOff = false;
   /** 另一个窗口拿着任务锁。 */
   private elsewhere = false;
+  /** 这次任务：「两边同时要」用了几次、各下载源下了几段、开始时间。 */
+  private hedges = 0;
+  private hedgeOff = false;
+  private fromSource: number[] = [];
+  private taskStartedAt = 0;
   /** 用 Web Locks 拿到的锁：调用即释放。 */
   private releaseWebLock?: () => void;
 
@@ -258,6 +283,7 @@ export class DictManager {
       activeId: this.state.activeId,
       resuming: this.resuming,
       elsewhere: this.elsewhere,
+      source: hostOf(this.catalog.urls[this.sourceIndex % this.catalog.urls.length]),
       history: this.state.history ?? []
     };
   }
@@ -486,7 +512,11 @@ export class DictManager {
       if (this.elsewhere) { this.elsewhere = false; this.emit(); }
       this.startHeartbeat();
       this.present = await this.store.segmentIndexes(this.catalog.id);
-      this.record(`完整词库任务开始（${reason}），已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段`);
+      this.record(`完整词库任务开始（${reason}），已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段，先从 ${hostOf(this.catalog.urls[this.sourceIndex % this.catalog.urls.length])} 下`);
+      this.hedges = 0;
+      this.hedgeOff = false;
+      this.fromSource = this.catalog.urls.map(() => 0);
+      this.taskStartedAt = this.now();
 
       while (gen === this.generation) {
         const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
@@ -518,7 +548,8 @@ export class DictManager {
           this.state.lastError = undefined;
           this.phase = "ready";
           await this.save();
-          this.record("完整词库下载并校验完成，等待启用");
+          const bySource = this.catalog.urls.map((u, i) => `${hostOf(u)} ${this.fromSource[i] ?? 0} 段`).join("，");
+          this.record(`完整词库下载并校验完成，等待启用（本次 ${Math.round((this.now() - this.taskStartedAt) / 1000)} 秒；${bySource}）`);
           this.emit();
           return;
         }
@@ -555,8 +586,81 @@ export class DictManager {
     }
   }
 
+  /**
+   * 下一段。先从当前下载源要；超过 slowSegmentMs 还没到，就同时向另一个源要同一段，谁先到（且校验通过）用谁，
+   * 之后都从快的那个源下。这不算失败、不消耗重试次数；每次最多多花一段（2 MB）流量。
+   * 另一个源也没更快（网络本身慢）就不再这样做，免得白白多花流量。
+   */
   private async fetchSegment(index: number, gen: number): Promise<void> {
-    const url = this.catalog.urls[this.sourceIndex % this.catalog.urls.length];
+    const n = this.catalog.urls.length;
+    const first = this.sourceIndex % n;
+    const result = await this.raceSegment(first, index, gen);
+    if (gen !== this.generation) return; // 迟到的响应：任务已被取消或换代
+    if (result.src !== first) {
+      this.sourceIndex = result.src;
+      this.record(`${hostOf(this.catalog.urls[first])} 太慢，第 ${index + 1} 段从 ${hostOf(this.catalog.urls[result.src])} 先下完，之后改从它下`);
+    }
+    if (result.full) {
+      // 服务器不支持分段、直接给了整包：按段切开，逐段核对后全部保存。
+      for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
+        if (gen !== this.generation) return;
+        const [s, e] = this.segmentRange(i);
+        await this.storeVerified(i, result.body.slice(s, e + 1));
+      }
+      this.fromSource[result.src] = (this.fromSource[result.src] ?? 0) + this.catalog.tarball.segments.length;
+      return;
+    }
+    await this.storeSegment(index, result.body);
+    this.fromSource[result.src] = (this.fromSource[result.src] ?? 0) + 1;
+  }
+
+  private raceSegment(first: number, index: number, gen: number): Promise<SegmentResult> {
+    const n = this.catalog.urls.length;
+    const second = (first + 1) % n;
+    return new Promise<SegmentResult>((resolve, reject) => {
+      let settled = false;
+      let hedged = false;
+      let pending = 1;
+      const finish = (): void => {
+        settled = true;
+        if (timer !== undefined) window.clearTimeout(timer);
+      };
+      const onOk = (result: SegmentResult): void => {
+        if (settled) return;
+        finish();
+        // 两边同时要了，却还是原来的源先到：说明慢的是网络本身，这次任务里不再两边同时要。
+        if (hedged && result.src === first && !this.hedgeOff) {
+          this.hedgeOff = true;
+          this.record(`两个下载源一样慢（网络本身慢），这次不再同时向两边要`);
+        }
+        resolve(result);
+      };
+      const onError = (error: unknown): void => {
+        pending -= 1;
+        if (settled) return;
+        if (!hedged || pending === 0) {
+          finish();
+          if (hedged && !this.hedgeOff) this.hedgeOff = true;
+          reject(error);
+        }
+      };
+      const timer: number | undefined = n > 1 && !this.hedgeOff && this.hedges < this.config.maxHedges
+        ? window.setTimeout(() => {
+          if (settled || gen !== this.generation) return;
+          hedged = true;
+          pending += 1;
+          this.hedges += 1;
+          this.record(`第 ${index + 1} 段从 ${hostOf(this.catalog.urls[first])} 下了 ${Math.round(this.config.slowSegmentMs / 1000)} 秒还没完，同时向 ${hostOf(this.catalog.urls[second])} 要`);
+          this.requestSegment(second, index).then(onOk, onError);
+        }, this.config.slowSegmentMs)
+        : undefined;
+      this.requestSegment(first, index).then(onOk, onError);
+    });
+  }
+
+  /** 向一个下载源要一段并核对。只有长度、哈希都对才算拿到，坏数据不能「抢先」。 */
+  private async requestSegment(src: number, index: number): Promise<SegmentResult> {
+    const url = this.catalog.urls[src];
     const [start, end] = this.segmentRange(index);
     let res: RangeResponse;
     try {
@@ -565,7 +669,6 @@ export class DictManager {
       if (error instanceof FetchFailure) throw error;
       throw new FetchFailure("network", `连接失败：${error instanceof Error ? error.message : String(error)}`);
     }
-    if (gen !== this.generation) return; // 迟到的响应：任务已被取消或换代
 
     const { status } = res;
     if (status === 429) {
@@ -574,28 +677,19 @@ export class DictManager {
     }
     if (status === 404 || status === 403 || status === 410) throw new FetchFailure("missing", `文件不在这个地址（HTTP ${status}），可能镜像还没同步`);
     if (status >= 500) throw new FetchFailure("server", `服务器错误（HTTP ${status}）`);
-
-    if (status === 200 && res.body.byteLength === this.catalog.tarball.bytes) {
-      // 服务器不支持分段、直接给了整包：按段切开，逐段核对后全部保存。
-      for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
-        if (gen !== this.generation) return;
-        const [s, e] = this.segmentRange(i);
-        await this.storeVerified(i, res.body.slice(s, e + 1));
-      }
-      return;
-    }
+    if (status === 200 && res.body.byteLength === this.catalog.tarball.bytes) return { src, body: res.body, full: true };
     if (status !== 206 && status !== 200) throw new FetchFailure("server", `意外的响应（HTTP ${status}）`);
     const expected = end - start + 1;
     if (res.body.byteLength !== expected) {
       const type = res.headers["content-type"] ?? res.headers["Content-Type"] ?? "";
       throw new FetchFailure("integrity", `长度不符：收到 ${res.body.byteLength} 字节，应为 ${expected}${/html/i.test(type) ? "（服务器返回了网页，不是词库数据）" : ""}`);
     }
-    await this.storeVerified(index, res.body);
+    if ((await sha256Hex(res.body)) !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `第 ${index + 1} 段校验不符`);
+    return { src, body: res.body, full: false };
   }
 
-  private async storeVerified(index: number, body: ArrayBuffer): Promise<void> {
-    const hash = await sha256Hex(body);
-    if (hash !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `第 ${index + 1} 段校验不符`);
+  /** 保存已核对过的一段。每存好一段就是一个检查点。 */
+  private async storeSegment(index: number, body: ArrayBuffer): Promise<void> {
     try {
       await this.store.putSegment(this.catalog.id, index, body);
     } catch (error) {
@@ -603,6 +697,12 @@ export class DictManager {
     }
     this.present.add(index);
     this.emit();
+  }
+
+  private async storeVerified(index: number, body: ArrayBuffer): Promise<void> {
+    const hash = await sha256Hex(body);
+    if (hash !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `第 ${index + 1} 段校验不符`);
+    await this.storeSegment(index, body);
   }
 
   /** 返回 true 表示本轮还能继续（已按退避等待过）；false 表示本轮结束。 */

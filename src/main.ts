@@ -1332,7 +1332,7 @@ export default class JustTypePlugin extends Plugin {
     const time = (at?: number): string => (at ? new Date(at).toLocaleString() : "无");
     return [
       `  目标 ${s.catalog.id}｜tgz ${s.catalog.tarball.bytes} B｜sha256 ${s.catalog.tarball.sha256}`,
-      `  下载地址 ${s.catalog.urls.join(" → ")}${USING_DEV_URLS ? "（测试地址）" : ""}`,
+      `  下载地址 ${s.catalog.urls.join(" → ")}${USING_DEV_URLS ? "（测试地址）" : ""}｜当前 ${s.source}`,
       `  阶段 ${s.phase}｜已核对 ${s.segmentsDone}/${s.segmentsTotal} 段（${s.bytesDone}/${s.bytesTotal} B）｜接着下 ${s.resuming}`,
       `  暂停意图 ${s.pausedReason ?? "无"}｜下次自动重试 ${time(s.nextRetryAt)}`,
       `  最近错误 ${s.error ? `${s.error.kind}：${s.error.message}` : "无"}`,
