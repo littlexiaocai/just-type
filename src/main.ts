@@ -10,7 +10,7 @@ import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
-const PLUGIN_VERSION = "0.7.24";
+const PLUGIN_VERSION = "1.0.0";
 declare const JT_BUILD_TIME: string;
 const BUILD_TIME = typeof JT_BUILD_TIME !== "undefined" ? JT_BUILD_TIME : "未知";
 const INIT_TIMEOUT_MS = 45000;
@@ -617,7 +617,7 @@ export default class JustTypePlugin extends Plugin {
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<JustTypeSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
-    // 0.7.24 起拼音固定显示在光标处，旧版本存下的「拼音显示位置」不再使用。
+    // 1.0.0 起拼音固定显示在光标处，旧版本存下的「拼音显示位置」不再使用。
     Reflect.deleteProperty(this.settings, "preeditPosition");
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
     this.log(`插件 ${PLUGIN_VERSION} 载入`);

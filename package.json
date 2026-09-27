@@ -1,6 +1,6 @@
 {
   "name": "obsidian-just-type",
-  "version": "0.7.24",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {

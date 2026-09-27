@@ -1,14 +1,20 @@
 # Just Type · 就打个字
 
-## 最近更新 · What's new（0.7.24）
+## 最近更新 · What's new（1.0.0）
 
-- **词库扩充到约 187 万条（来自雾凇拼音）**：第一次打开后在后台自动下载约 26 MB，下载期间照常打字，下好后在你停手时自动换上，之后不用联网。三字词、四字成语明显更准
+### 🎉 词库大升级，打字更畅快：从约 6.5 万条扩充到约 187 万条
+
+三字词、四字成语、常用说法一打就出来，候选更准，少翻页。词库来自[雾凇拼音](https://github.com/iDvel/rime-ice)，第一次打开后在后台自动下载约 26 MB，下载期间照常打字，下好后在你停手时自动换上，之后不用联网。
+
 - **国内从 npmmirror 下载**，不用翻墙；它慢时自动改从国外源下。每一段都核对校验值，断网或中断后自动接着下
 - **第一次下载时笔记右上角显示进度**，也可以在设置里暂停
 - **换词库不影响**输入法已经记住的你的用词习惯
 - **设置页更简洁**：正常时只显示版本；拼音固定显示在光标处，和微信、搜狗一样
 
-- **A much larger dictionary (about 1.87 million entries, from rime-ice)**: on first launch about 26 MB downloads in the background while you keep typing; it is switched in when you pause, then works offline. Three-character words and four-character idioms are much more accurate
+### 🎉 A big dictionary upgrade for smoother typing: from about 65 thousand to about 1.87 million entries
+
+Three-character words, four-character idioms and everyday phrases come up right away, with better candidates and less paging. The dictionary comes from [rime-ice](https://github.com/iDvel/rime-ice). On first launch about 26 MB downloads in the background while you keep typing; it is switched in when you pause, then works offline.
+
 - **Downloads from npmmirror** (reachable in mainland China) and switches to the overseas source automatically when it is slow; every segment is checksum-verified and a download interrupted by going offline resumes on its own
 - **Progress shows at the top right of the note** during the first download; you can pause it in settings
 - **Switching dictionaries keeps** what the input method has learned from you
