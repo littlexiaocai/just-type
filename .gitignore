@@ -5,3 +5,8 @@ node_modules/
 src/assets/*.gz
 src/assets/*.txt
 src/assets/.lock-applied
+
+# 发版时由 scripts/release-meta.mjs 生成
+npm/package.json
+npm/manifest.json
+npm/update.json

@@ -1,6 +1,7 @@
 # Upstream components
 
-Just Type IME (就打个字) does not fetch anything at runtime. The RIME engine and the
+Just Type IME (就打个字) does not fetch the engine or dictionaries at runtime (its only
+network access is the optional update reminder; see README "Network use"). The RIME engine and the
 pinyin schemas are bundled into `main.js` at build time, which means this
 repository and every release **redistribute** the upstream artifacts listed below.
 

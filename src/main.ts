@@ -4,8 +4,10 @@ import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } fro
 import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, loadLocalAssets, type LocalAssets } from "./assets";
 import { searchEmoji, type EmojiEntry } from "./emoji";
+import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
+import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
-const PLUGIN_VERSION = "0.7.20";
+const PLUGIN_VERSION = "0.7.21";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";
@@ -337,9 +339,10 @@ interface JustTypeSettings {
   toggleKey: ToggleKey;
   pinyinSeparator: PinyinSeparator;
   preeditPosition: PreeditPosition;
+  updateCheck: boolean;
 }
 
-const DEFAULT_SETTINGS: JustTypeSettings = { toggleKey: "Shift", pinyinSeparator: "apostrophe", preeditPosition: "inline" };
+const DEFAULT_SETTINGS: JustTypeSettings = { toggleKey: "Shift", pinyinSeparator: "apostrophe", preeditPosition: "inline", updateCheck: true };
 
 const MODE_LABEL: Record<InputMode, string> = { chinese: "Just Type 中", english: "Just Type 英", emoji: "Just Type 😀" };
 const MODE_NOTICE: Record<InputMode, string> = {
@@ -355,6 +358,8 @@ type SkipReason =
   | "带修饰键"
   | "系统输入法组合中"
   | "非拼音按键";
+
+const UPDATE_DESC = "每 24 小时最多联网一次（npmmirror，备选 jsDelivr、GitHub），只读取最新版本号和一句更新要点，不发送任何本机数据。更新仍由你在插件页自己点「更新」。每台设备分别提醒。";
 
 class JustTypeSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: JustTypePlugin) {
@@ -389,6 +394,30 @@ class JustTypeSettingTab extends PluginSettingTab {
         key: "pinyinSeparator",
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
+    }, {
+      name: "有新版本时提醒",
+      desc: UPDATE_DESC,
+      aliases: ["update", "version", "更新", "版本", "提醒"],
+      control: { type: "toggle", key: "updateCheck" }
+    }, {
+      name: "现在检查新版本",
+      desc: "立即联网查一次，不受 24 小时间隔限制。",
+      aliases: ["check", "update", "检查更新"],
+      action: () => void this.plugin.checkUpdateNow()
+    }, {
+      name: "不再提醒已发现的新版本",
+      desc: "只对目前发现的这个版本生效；以后出了更新的版本还会提醒。",
+      aliases: ["ignore", "update", "不再提醒"],
+      visible: () => this.plugin.hasPendingUpdate(),
+      action: () => {
+        this.plugin.ignorePendingUpdate();
+        this.refreshDomState();
+      }
+    }, {
+      name: "查看最近更新",
+      desc: "看看最近几个版本改了什么。",
+      aliases: ["changelog", "what's new", "更新说明"],
+      action: () => this.plugin.openWhatsNew()
     }];
   }
 
@@ -437,6 +466,45 @@ class JustTypeSettingTab extends PluginSettingTab {
           await this.plugin.saveData(this.plugin.settings);
         });
       });
+
+    new Setting(containerEl)
+      .setName("有新版本时提醒")
+      .setDesc(UPDATE_DESC)
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.updateCheck);
+        toggle.onChange(async (value) => {
+          this.plugin.settings.updateCheck = value;
+          await this.plugin.saveData(this.plugin.settings);
+        });
+      })
+      .addButton((button) => button.setButtonText("现在检查").onClick(() => void this.plugin.checkUpdateNow()));
+
+    new Setting(containerEl)
+      .setName("最近更新")
+      .setDesc("看看最近几个版本改了什么。")
+      .addButton((button) => button.setButtonText("查看").onClick(() => this.plugin.openWhatsNew()));
+  }
+}
+
+/* 「这次更新了什么」：按版本分组列出要点。 */
+class WhatsNewModal extends Modal {
+  constructor(app: App, private notes: ReleaseNote[], private heading: string) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.setTitle(this.heading);
+    for (const note of this.notes) {
+      this.contentEl.createEl("h4", { text: note.version, cls: "just-type-whatsnew-version" });
+      const list = this.contentEl.createEl("ul", { cls: "just-type-whatsnew-list" });
+      for (const item of note.items) list.createEl("li", { text: item });
+    }
+    const actions = this.contentEl.createDiv({ cls: "just-type-diag-actions" });
+    actions.createEl("button", { text: "知道了", cls: "mod-cta" }).addEventListener("click", () => this.close());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
 
@@ -499,6 +567,10 @@ export default class JustTypePlugin extends Plugin {
   /* iPad 上手指一按候选栏，编辑器就先失焦。记下按下的时刻，这之后短时间内的失焦不当成「离开」。 */
   private panelPressAt = -Infinity;
   private activeSink?: InputSink;
+  private updates?: UpdateChecker;
+  /* 这次启动已经提醒过的版本：同一次打开里不重复弹。 */
+  private remindedVersion?: string;
+  private upgradedFrom?: string;
   private status?: HTMLElement;
   private ribbon?: HTMLElement;
   private inputSequence = 0;
@@ -530,6 +602,19 @@ export default class JustTypePlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
     this.log(`插件 ${PLUGIN_VERSION} 载入`);
+
+    // 新版本提醒不依赖引擎：引擎加载失败的用户更需要知道有新版本。
+    this.updates = new UpdateChecker(this.app, PLUGIN_VERSION, (message) => this.log(message));
+    this.upgradedFrom = this.updates.recordRun();
+    if (this.settings.updateCheck) {
+      this.remindIfNewer();
+      void this.updates.maybeCheck().then((got) => { if (got) this.remindIfNewer(); });
+    }
+    // iPad 上 Obsidian 常常只是切到后台，回到前台时也按 24 小时间隔查一次。
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !this.settings.updateCheck || !this.updates) return;
+      void this.updates.maybeCheck().then((got) => { if (got) this.remindIfNewer(); });
+    });
     this.log(this.environmentLine());
 
     this.createPanel();
@@ -563,7 +648,8 @@ export default class JustTypePlugin extends Plugin {
       this.ready = true;
       this.updateStatus();
       this.log(`就绪，总耗时 ${Date.now() - this.startedAt}ms`);
-      new Notice(this.readyHint());
+      if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
+      else new Notice(this.readyHint());
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
@@ -795,6 +881,83 @@ export default class JustTypePlugin extends Plugin {
     ].join("\n");
   }
 
+  /* ---------------- 新版本与更新说明 ---------------- */
+
+  /* 不会自动消失，直到点按钮或点通知本身。这次打开里同一个版本只弹一次；下次打开还会再提醒。 */
+  private remindIfNewer(): void {
+    const info = this.updates?.newer();
+    if (!info || this.updates!.isIgnored(info.version) || this.remindedVersion === info.version) return;
+    this.remindedVersion = info.version;
+    const message = createFragment((f) => {
+      f.createDiv({ cls: "just-type-update-title", text: `Just Type 有新版本 ${info.version}（当前 ${PLUGIN_VERSION}）` });
+      if (info.headline) f.createDiv({ cls: "just-type-update-headline", text: info.headline });
+      const actions = f.createDiv({ cls: "just-type-update-actions" });
+      actions.createEl("button", { text: "去更新", cls: "mod-cta" }).addEventListener("click", () => this.openPluginPage());
+      // 点通知任何地方它都会收起；「稍后提醒」就是收起，下次打开 Obsidian 再说。
+      actions.createEl("button", { text: "稍后提醒" });
+    });
+    new Notice(message, 0);
+  }
+
+  /* 走 Obsidian 自己的插件页，由用户点「更新」完成官方流程。插件不下载、不安装自己。 */
+  private openPluginPage(): void {
+    window.open(PLUGIN_PAGE_URI);
+  }
+
+  private notesSince(previous: string): ReleaseNote[] {
+    return RELEASE_NOTES.filter((note) => compareVersions(note.version, previous) > 0 && compareVersions(note.version, PLUGIN_VERSION) <= 0);
+  }
+
+  /* 升级后第一次启动：把平时的「已就绪」换成这一条，不额外多弹。 */
+  private showUpgradedNotice(previous: string): void {
+    const notes = this.notesSince(previous);
+    if (!notes.length) {
+      new Notice(this.readyHint());
+      return;
+    }
+    const message = createFragment((f) => {
+      f.createDiv({ cls: "just-type-update-title", text: `Just Type 已更新到 ${PLUGIN_VERSION}，已就绪` });
+      f.createDiv({ cls: "just-type-update-link", text: "点这里看更新了什么" });
+    });
+    const notice = new Notice(message, 12000);
+    notice.messageEl?.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} 更新了什么`).open());
+  }
+
+  openWhatsNew(): void {
+    const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
+    new WhatsNewModal(this.app, notes, "Just Type 最近更新").open();
+  }
+
+  hasPendingUpdate(): boolean {
+    const info = this.updates?.newer();
+    return Boolean(info && !this.updates!.isIgnored(info.version));
+  }
+
+  ignorePendingUpdate(): void {
+    const info = this.updates?.newer();
+    if (!info) return;
+    this.updates!.ignore(info.version);
+    new Notice(`不再提醒 ${info.version}。以后出了更新的版本还会提醒。`, 6000);
+  }
+
+  async checkUpdateNow(): Promise<void> {
+    if (!this.updates) return;
+    const pending = new Notice("正在检查 Just Type 新版本…", 0);
+    const got = await this.updates.maybeCheck(true);
+    pending.hide();
+    if (!got) {
+      new Notice("检查失败：网络连不上版本信息地址。不影响输入，稍后会自动再试。", 8000);
+      return;
+    }
+    const info = this.updates.newer();
+    if (!info) {
+      new Notice(`Just Type ${PLUGIN_VERSION} 已是最新版。`, 5000);
+      return;
+    }
+    this.remindedVersion = undefined;
+    this.remindIfNewer();
+  }
+
   /* ---------------- UI ---------------- */
 
   private registerCommands(): void {
@@ -848,6 +1011,16 @@ export default class JustTypePlugin extends Plugin {
       id: "save-report",
       name: "诊断：把报告存进 Vault (save report)",
       callback: () => void this.saveReport()
+    });
+    this.addCommand({
+      id: "whats-new",
+      name: "查看最近更新 (what's new)",
+      callback: () => this.openWhatsNew()
+    });
+    this.addCommand({
+      id: "check-update",
+      name: "检查新版本 (check update)",
+      callback: () => void this.checkUpdateNow()
     });
   }
 

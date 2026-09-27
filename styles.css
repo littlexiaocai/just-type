@@ -131,3 +131,33 @@
   justify-content: flex-end;
   margin-top: 12px;
 }
+
+/* --- 新版本提醒与更新说明 --- */
+.just-type-update-title {
+  font-weight: 600;
+}
+
+.just-type-update-headline,
+.just-type-update-link {
+  margin-top: 4px;
+}
+
+.just-type-update-link {
+  color: var(--text-accent);
+}
+
+.just-type-update-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.just-type-whatsnew-version {
+  margin: 12px 0 4px;
+}
+
+.just-type-whatsnew-list {
+  margin: 0;
+  padding-left: 1.2em;
+  line-height: 1.7;
+}

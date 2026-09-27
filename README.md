@@ -1,6 +1,14 @@
 # Just Type · 就打个字
 
-## 最近更新 · What's new（0.7.20）
+## 最近更新 · What's new（0.7.21）
+
+- **有新版本时会提醒你**：打开 Obsidian 时右上角提醒，点「去更新」直接跳到插件页（设置里可关闭，见下方「联网说明」）
+- **更新后告诉你改了什么**：升级后第一次打开，弹一次「这次更新了什么」
+
+- **Update reminder**: when a new version is out, a notice appears as Obsidian opens; "去更新" jumps to the plugin page (can be turned off; see "Network use" below)
+- **What's new after updating**: the first launch after an update shows what changed
+
+### 0.7.20
 
 - **笔记标题里也能打中文了**：新建笔记时直接在标题处打拼音、选词，按 Shift 切换中英文
 - **手指点候选词能上屏了**：iPad 上正文和标题都可以直接点选
@@ -83,6 +91,14 @@ Default traces are **redacted**: `key=<letter>` / `code=<letter key>` / `kc=<con
 
 默认记录是**脱敏**的：`key=<字母>` / `code=<字母键>` / `kc=<内容>`。具名键（`Shift`、`Escape`、`Unidentified`）和关键信号（`keyCode=229`、`code=""`）原样保留，足以判断键盘行为，但还原不出输入内容。脱敏发生在写入时刻，事后开启敏感模式不会回溯暴露已记录的按键。
 
+## Network use · 联网说明
+
+Typing is fully offline: the Pinyin engine and dictionary ship with the plugin, and nothing is fetched while you type.
+The only network access is the optional **update reminder**. At most once every 24 hours it reads the latest version number and a one-line summary from `registry.npmmirror.com`, falling back to `cdn.jsdelivr.net` and then `api.github.com`. No data about you or your vault is sent. Turn it off in settings with **有新版本时提醒**. Updates are always installed by you through Obsidian's own plugin page; the plugin never downloads or installs itself.
+
+输入过程完全离线：拼音引擎和词库都随插件提供，打字时不联网。
+唯一的联网行为是可选的**有新版本时提醒**：每 24 小时最多一次，从 `registry.npmmirror.com` 读取最新版本号和一句更新要点，失败时依次尝试 `cdn.jsdelivr.net`、`api.github.com`。不发送任何关于你或你的笔记的数据。可在设置里关闭「有新版本时提醒」。更新始终由你在 Obsidian 插件页自己完成，插件不会自己下载或安装自己。
+
 ## Feedback
 
 If you run into a problem, please open a GitHub Issue: https://github.com/littlexiaocai/just-type/issues
@@ -104,7 +120,7 @@ If you can, include your iPad model, iPadOS version, Obsidian version, and a scr
 
 就打个字以 **AGPL-3.0-or-later** 发布，与其内嵌的 My RIME 一致。
 
-运行时不联网意味着仓库和每个 Release 都在再分发第三方作品。完整清单、版本与许可证见 `THIRD_PARTY_NOTICES.md`；构建期的抓取过程见 `UPSTREAM.md`。主要的两块：
+输入所需的引擎和词库都随插件提供、不在运行时下载，这意味着仓库和每个 Release 都在再分发第三方作品。完整清单、版本与许可证见 `THIRD_PARTY_NOTICES.md`；构建期的抓取过程见 `UPSTREAM.md`。主要的两块：
 
 | 组件 | 许可证 |
 |---|---|

@@ -38,7 +38,7 @@ __export(main_exports, {
   default: () => JustTypePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // src/inline-preedit.ts
 var import_state = require("@codemirror/state");
@@ -437,8 +437,179 @@ function searchEmoji(query, limit) {
   return [...prefix, ...contains].slice(0, limit);
 }
 
+// src/update.ts
+var import_obsidian = require("obsidian");
+var PLUGIN_ID = "just-type";
+var PLUGIN_PAGE_URI = `obsidian://show-plugin?id=${PLUGIN_ID}`;
+var CHECK_INTERVAL_MS = 24 * 60 * 60 * 1e3;
+var RETRY_INTERVAL_MS = 60 * 60 * 1e3;
+var REQUEST_TIMEOUT_MS = 8e3;
+var STORE_KEY = "just-type-update";
+var HEADLINE_MAX = 60;
+var SOURCES = [
+  {
+    name: "npmmirror",
+    url: "https://registry.npmmirror.com/just-type-ime/latest",
+    parse: (json) => {
+      const j = json;
+      const repo = typeof j.repository === "string" ? j.repository : j.repository?.url;
+      if (typeof repo !== "string" || !repo.includes("littlexiaocai/just-type")) throw new Error("\u4ED3\u5E93\u5730\u5740\u4E0D\u7B26\uFF0C\u4E0D\u662F\u672C\u63D2\u4EF6\u7684\u5305");
+      return { version: j.version, headline: j.justType?.headline };
+    }
+  },
+  {
+    name: "jsDelivr",
+    // 不带版本号时 jsDelivr 取最新的 tag，也就是最新 Release 里的文件，不会跑在 Release 前面。
+    url: "https://cdn.jsdelivr.net/gh/littlexiaocai/just-type/update.json",
+    parse: (json) => json
+  },
+  {
+    name: "GitHub",
+    url: "https://api.github.com/repos/littlexiaocai/just-type/releases/latest",
+    parse: (json) => {
+      const j = json;
+      return { version: j.tag_name, headline: typeof j.body === "string" ? firstBullet(j.body) : "" };
+    }
+  }
+];
+function firstBullet(markdown) {
+  const line = markdown.split("\n").find((l) => /^\s*[-*]\s+/.test(l));
+  if (!line) return "";
+  const text = line.replace(/^\s*[-*]\s+/, "");
+  const bold = /\*\*(.+?)\*\*/.exec(text);
+  return bold ? bold[1] : text.split(/[：:]/)[0];
+}
+function cleanHeadline(value) {
+  if (typeof value !== "string") return "";
+  const text = value.replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
+  return text.length > HEADLINE_MAX ? `${text.slice(0, HEADLINE_MAX - 1)}\u2026` : text;
+}
+function isVersion(value) {
+  return typeof value === "string" && /^\d+(\.\d+){1,3}$/.test(value);
+}
+function compareVersions(a, b) {
+  const parse = (v) => v.split("-")[0].split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+async function fetchJson(url) {
+  const request = (0, import_obsidian.requestUrl)({ url, method: "GET", throw: false, headers: { Accept: "application/json" } });
+  const timer = new Promise((_, reject) => window.setTimeout(() => reject(new Error("\u8D85\u65F6")), REQUEST_TIMEOUT_MS));
+  const response = await Promise.race([request, timer]);
+  if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+  return response.json;
+}
+var UpdateChecker = class {
+  constructor(app, current, log) {
+    this.app = app;
+    this.current = current;
+    this.log = log;
+    this.state = this.load();
+  }
+  /* ---------- 本机存储 ---------- */
+  load() {
+    try {
+      const app = this.app;
+      const raw = typeof app.loadLocalStorage === "function" ? app.loadLocalStorage(STORE_KEY) : window.localStorage.getItem(`${STORE_KEY}:${this.app.vault.getName()}`);
+      if (!raw) return {};
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
+      return {};
+    }
+  }
+  save() {
+    try {
+      const app = this.app;
+      const raw = JSON.stringify(this.state);
+      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(STORE_KEY, raw);
+      else window.localStorage.setItem(`${STORE_KEY}:${this.app.vault.getName()}`, raw);
+    } catch {
+    }
+  }
+  /* ---------- 刚更新过 ---------- */
+  /** 记下本次运行的版本。返回「升级前的版本」；首次在这台设备运行、没升级或降级都返回 undefined。 */
+  recordRun() {
+    const previous = this.state.lastRunVersion;
+    this.state.lastRunVersion = this.current;
+    if (this.state.latest && compareVersions(this.state.latest.version, this.current) <= 0) this.state.latest = void 0;
+    this.save();
+    return previous && compareVersions(previous, this.current) < 0 ? previous : void 0;
+  }
+  /* ---------- 新版本 ---------- */
+  /** 已知的、比当前版本新、且没被「不再提醒」的版本。 */
+  newer() {
+    const latest = this.state.latest;
+    if (!latest || compareVersions(latest.version, this.current) <= 0) return void 0;
+    return latest;
+  }
+  isIgnored(version) {
+    return this.state.ignoredVersion === version;
+  }
+  ignore(version) {
+    this.state.ignoredVersion = version;
+    this.save();
+  }
+  /** 距离上次成功检查超过 24 小时才联网；失败后一小时内不重试。force 用于「现在检查」。返回是否拿到了结果。 */
+  async maybeCheck(force = false) {
+    if (this.checking) return await this.checking;
+    const now = Date.now();
+    if (!force) {
+      if (this.state.lastSuccessAt && now - this.state.lastSuccessAt < CHECK_INTERVAL_MS) return false;
+      if (this.state.lastAttemptAt && now - this.state.lastAttemptAt < RETRY_INTERVAL_MS) return false;
+    }
+    if (!navigator.onLine) return false;
+    this.checking = this.check().finally(() => {
+      this.checking = void 0;
+    });
+    return await this.checking;
+  }
+  async check() {
+    this.state.lastAttemptAt = Date.now();
+    this.save();
+    for (const source of SOURCES) {
+      try {
+        const info = source.parse(await fetchJson(source.url));
+        if (!isVersion(info.version)) throw new Error("\u7248\u672C\u53F7\u683C\u5F0F\u4E0D\u5BF9");
+        this.state.latest = { version: info.version, headline: cleanHeadline(info.headline), source: source.name };
+        this.state.lastSuccessAt = Date.now();
+        this.save();
+        this.log(`\u65B0\u7248\u672C\u68C0\u67E5\uFF1A${source.name} \u8FD4\u56DE ${info.version}\uFF08\u5F53\u524D ${this.current}\uFF09`);
+        return true;
+      } catch (error) {
+        this.log(`\u65B0\u7248\u672C\u68C0\u67E5\uFF1A${source.name} \u5931\u8D25\uFF08${error instanceof Error ? error.message : String(error)}\uFF09`);
+      }
+    }
+    return false;
+  }
+};
+
+// src/release-notes.ts
+var RELEASE_NOTES = [
+  {
+    version: "0.7.21",
+    items: [
+      "\u6709\u65B0\u7248\u672C\u65F6\uFF0C\u6253\u5F00 Obsidian \u4F1A\u5728\u53F3\u4E0A\u89D2\u63D0\u9192\u4F60\uFF0C\u70B9\u300C\u53BB\u66F4\u65B0\u300D\u76F4\u63A5\u8DF3\u5230\u63D2\u4EF6\u9875\uFF08\u8BBE\u7F6E\u91CC\u53EF\u5173\u95ED\uFF09",
+      "\u66F4\u65B0\u4E4B\u540E\uFF0C\u4F1A\u50CF\u73B0\u5728\u8FD9\u6837\u5F39\u4E00\u6B21\u300C\u8FD9\u6B21\u66F4\u65B0\u4E86\u4EC0\u4E48\u300D"
+    ]
+  },
+  {
+    version: "0.7.20",
+    items: [
+      "\u7B14\u8BB0\u6807\u9898\u91CC\u4E5F\u80FD\u6253\u4E2D\u6587\u4E86\uFF1A\u65B0\u5EFA\u7B14\u8BB0\u65F6\u76F4\u63A5\u5728\u6807\u9898\u5904\u6253\u62FC\u97F3\u3001\u9009\u8BCD\uFF0C\u6309 Shift \u5207\u6362\u4E2D\u82F1\u6587",
+      "\u624B\u6307\u70B9\u5019\u9009\u8BCD\u80FD\u4E0A\u5C4F\u4E86\uFF1AiPad \u4E0A\u6B63\u6587\u548C\u6807\u9898\u90FD\u53EF\u4EE5\u76F4\u63A5\u70B9\u9009",
+      "\u987F\u53F7\uFF1A\u4E2D\u6587\u6A21\u5F0F\u4E0B\u6309 / \u6216 \\ \u76F4\u63A5\u6253\u51FA\u300C\u3001\u300D",
+      "\u4E2D\u6587\u6807\u70B9\u66F4\u5B8C\u6574\uFF1A\uFF1F\uFF01\uFF1A\u5355\u72EC\u8F93\u5165\u65F6\u4E5F\u662F\u4E2D\u6587\u6807\u70B9"
+    ]
+  }
+];
+
 // src/main.ts
-var PLUGIN_VERSION = "0.7.20";
+var PLUGIN_VERSION = "0.7.21";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -662,14 +833,15 @@ var PREEDIT_POSITION_LABEL = {
   inline: "\u884C\u5185\u3000\u62FC\u97F3\u5728\u5149\u6807\u5904\uFF0C\u548C\u5FAE\u4FE1\u8F93\u5165\u6CD5\u4E00\u6837",
   panel: "\u5019\u9009\u680F\u4E0A\u65B9\u3000\u65E7\u7248\u6837\u5F0F"
 };
-var DEFAULT_SETTINGS = { toggleKey: "Shift", pinyinSeparator: "apostrophe", preeditPosition: "inline" };
+var DEFAULT_SETTINGS = { toggleKey: "Shift", pinyinSeparator: "apostrophe", preeditPosition: "inline", updateCheck: true };
 var MODE_LABEL = { chinese: "Just Type \u4E2D", english: "Just Type \u82F1", emoji: "Just Type \u{1F600}" };
 var MODE_NOTICE = {
   chinese: "\u4E2D\u6587",
   english: "\u82F1\u6587",
   emoji: "\u8868\u60C5 \u2014 \u6253\u5173\u952E\u8BCD\u641C\u7D22\uFF0C\u5982 xiao / smile / huo\u3002\u6309 Shift \u56DE\u4E2D\u6587"
 };
-var JustTypeSettingTab = class extends import_obsidian.PluginSettingTab {
+var UPDATE_DESC = "\u6BCF 24 \u5C0F\u65F6\u6700\u591A\u8054\u7F51\u4E00\u6B21\uFF08npmmirror\uFF0C\u5907\u9009 jsDelivr\u3001GitHub\uFF09\uFF0C\u53EA\u8BFB\u53D6\u6700\u65B0\u7248\u672C\u53F7\u548C\u4E00\u53E5\u66F4\u65B0\u8981\u70B9\uFF0C\u4E0D\u53D1\u9001\u4EFB\u4F55\u672C\u673A\u6570\u636E\u3002\u66F4\u65B0\u4ECD\u7531\u4F60\u5728\u63D2\u4EF6\u9875\u81EA\u5DF1\u70B9\u300C\u66F4\u65B0\u300D\u3002\u6BCF\u53F0\u8BBE\u5907\u5206\u522B\u63D0\u9192\u3002";
+var JustTypeSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -702,12 +874,36 @@ var JustTypeSettingTab = class extends import_obsidian.PluginSettingTab {
         key: "pinyinSeparator",
         options: { ...PINYIN_SEPARATOR_LABEL }
       }
+    }, {
+      name: "\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192",
+      desc: UPDATE_DESC,
+      aliases: ["update", "version", "\u66F4\u65B0", "\u7248\u672C", "\u63D0\u9192"],
+      control: { type: "toggle", key: "updateCheck" }
+    }, {
+      name: "\u73B0\u5728\u68C0\u67E5\u65B0\u7248\u672C",
+      desc: "\u7ACB\u5373\u8054\u7F51\u67E5\u4E00\u6B21\uFF0C\u4E0D\u53D7 24 \u5C0F\u65F6\u95F4\u9694\u9650\u5236\u3002",
+      aliases: ["check", "update", "\u68C0\u67E5\u66F4\u65B0"],
+      action: () => void this.plugin.checkUpdateNow()
+    }, {
+      name: "\u4E0D\u518D\u63D0\u9192\u5DF2\u53D1\u73B0\u7684\u65B0\u7248\u672C",
+      desc: "\u53EA\u5BF9\u76EE\u524D\u53D1\u73B0\u7684\u8FD9\u4E2A\u7248\u672C\u751F\u6548\uFF1B\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002",
+      aliases: ["ignore", "update", "\u4E0D\u518D\u63D0\u9192"],
+      visible: () => this.plugin.hasPendingUpdate(),
+      action: () => {
+        this.plugin.ignorePendingUpdate();
+        this.refreshDomState();
+      }
+    }, {
+      name: "\u67E5\u770B\u6700\u8FD1\u66F4\u65B0",
+      desc: "\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002",
+      aliases: ["changelog", "what's new", "\u66F4\u65B0\u8BF4\u660E"],
+      action: () => this.plugin.openWhatsNew()
     }];
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
+    new import_obsidian2.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -717,7 +913,7 @@ var JustTypeSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian.Setting(containerEl).setName("\u62FC\u97F3\u663E\u793A\u4F4D\u7F6E").setDesc("\u6B63\u5728\u6253\u7684\u62FC\u97F3\u663E\u793A\u5728\u54EA\u91CC\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
+    new import_obsidian2.Setting(containerEl).setName("\u62FC\u97F3\u663E\u793A\u4F4D\u7F6E").setDesc("\u6B63\u5728\u6253\u7684\u62FC\u97F3\u663E\u793A\u5728\u54EA\u91CC\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(PREEDIT_POSITION_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -727,7 +923,7 @@ var JustTypeSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
-    new import_obsidian.Setting(containerEl).setName("\u62FC\u97F3\u5206\u9694\u7B26").setDesc("\u62FC\u97F3\u97F3\u8282\u4E4B\u95F4\u7528\u4EC0\u4E48\u9694\u5F00\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
+    new import_obsidian2.Setting(containerEl).setName("\u62FC\u97F3\u5206\u9694\u7B26").setDesc("\u62FC\u97F3\u97F3\u8282\u4E4B\u95F4\u7528\u4EC0\u4E48\u9694\u5F00\u3002\u53EA\u5F71\u54CD\u663E\u793A\uFF0C\u4E0D\u5F71\u54CD\u8F93\u5165\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(PINYIN_SEPARATOR_LABEL)) {
         dropdown.addOption(value, label);
       }
@@ -737,9 +933,37 @@ var JustTypeSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       });
     });
+    new import_obsidian2.Setting(containerEl).setName("\u6709\u65B0\u7248\u672C\u65F6\u63D0\u9192").setDesc(UPDATE_DESC).addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.updateCheck);
+      toggle.onChange(async (value) => {
+        this.plugin.settings.updateCheck = value;
+        await this.plugin.saveData(this.plugin.settings);
+      });
+    }).addButton((button) => button.setButtonText("\u73B0\u5728\u68C0\u67E5").onClick(() => void this.plugin.checkUpdateNow()));
+    new import_obsidian2.Setting(containerEl).setName("\u6700\u8FD1\u66F4\u65B0").setDesc("\u770B\u770B\u6700\u8FD1\u51E0\u4E2A\u7248\u672C\u6539\u4E86\u4EC0\u4E48\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openWhatsNew()));
   }
 };
-var DiagnosticsModal = class extends import_obsidian.Modal {
+var WhatsNewModal = class extends import_obsidian2.Modal {
+  constructor(app, notes, heading) {
+    super(app);
+    this.notes = notes;
+    this.heading = heading;
+  }
+  onOpen() {
+    this.setTitle(this.heading);
+    for (const note of this.notes) {
+      this.contentEl.createEl("h4", { text: note.version, cls: "just-type-whatsnew-version" });
+      const list = this.contentEl.createEl("ul", { cls: "just-type-whatsnew-list" });
+      for (const item of note.items) list.createEl("li", { text: item });
+    }
+    const actions = this.contentEl.createDiv({ cls: "just-type-diag-actions" });
+    actions.createEl("button", { text: "\u77E5\u9053\u4E86", cls: "mod-cta" }).addEventListener("click", () => this.close());
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var DiagnosticsModal = class extends import_obsidian2.Modal {
   constructor(app, report, sensitive = false) {
     super(app);
     this.report = report;
@@ -782,7 +1006,7 @@ var DiagnosticsModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var JustTypePlugin = class extends import_obsidian.Plugin {
+var JustTypePlugin = class extends import_obsidian2.Plugin {
   constructor() {
     super(...arguments);
     this.mode = "chinese";
@@ -819,6 +1043,20 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
     this.log(`\u63D2\u4EF6 ${PLUGIN_VERSION} \u8F7D\u5165`);
+    this.updates = new UpdateChecker(this.app, PLUGIN_VERSION, (message) => this.log(message));
+    this.upgradedFrom = this.updates.recordRun();
+    if (this.settings.updateCheck) {
+      this.remindIfNewer();
+      void this.updates.maybeCheck().then((got) => {
+        if (got) this.remindIfNewer();
+      });
+    }
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !this.settings.updateCheck || !this.updates) return;
+      void this.updates.maybeCheck().then((got) => {
+        if (got) this.remindIfNewer();
+      });
+    });
     this.log(this.environmentLine());
     this.createPanel();
     this.registerEditorExtension(inlinePreeditExtension);
@@ -846,14 +1084,15 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       this.ready = true;
       this.updateStatus();
       this.log(`\u5C31\u7EEA\uFF0C\u603B\u8017\u65F6 ${Date.now() - this.startedAt}ms`);
-      new import_obsidian.Notice(this.readyHint());
+      if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
+      else new import_obsidian2.Notice(this.readyHint());
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
       this.log(`\u521D\u59CB\u5316\u5931\u8D25\uFF1A${message}`);
       console.error("RIME initialization failed", error);
       this.updateStatus("\u52A0\u8F7D\u5931\u8D25");
-      new import_obsidian.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
+      new import_obsidian2.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
 \u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 15e3);
     }
   }
@@ -868,8 +1107,8 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.diagnostics.push(`[+${stamp}ms] ${message}`);
   }
   environmentLine() {
-    const kind = import_obsidian.Platform.isIosApp ? "iOS/iPadOS App" : import_obsidian.Platform.isAndroidApp ? "Android App" : import_obsidian.Platform.isMacOS ? "macOS \u684C\u9762" : import_obsidian.Platform.isWin ? "Windows \u684C\u9762" : "\u5176\u5B83";
-    return `\u73AF\u5883\uFF1A${kind}\uFF5Cmobile=${import_obsidian.Platform.isMobile}\uFF5CObsidian ${this.app.appVersion ?? "?"}`;
+    const kind = import_obsidian2.Platform.isIosApp ? "iOS/iPadOS App" : import_obsidian2.Platform.isAndroidApp ? "Android App" : import_obsidian2.Platform.isMacOS ? "macOS \u684C\u9762" : import_obsidian2.Platform.isWin ? "Windows \u684C\u9762" : "\u5176\u5B83";
+    return `\u73AF\u5883\uFF1A${kind}\uFF5Cmobile=${import_obsidian2.Platform.isMobile}\uFF5CObsidian ${this.app.appVersion ?? "?"}`;
   }
   /** Separates "the CDN is unreachable" from "the page context is not allowed to fetch it". */
   /* 被动事件探针：只记录，不改变任何行为。用于在 iPad 上看清系统键盘到底发什么事件。 */
@@ -913,7 +1152,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     this.imeTookOver = true;
     if (Date.now() - this.lastImeWarnAt < IME_WARN_COOLDOWN_MS) return;
     this.lastImeWarnAt = Date.now();
-    new import_obsidian.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u2014\u2014\u6309\u952E\u73B0\u5728\u5F52\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
+    new import_obsidian2.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u2014\u2014\u6309\u952E\u73B0\u5728\u5F52\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
   }
   describeEvent(event) {
     const input = event;
@@ -991,10 +1230,10 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
         await this.app.vault.createFolder(REPORT_FOLDER);
       }
       const file = await this.app.vault.create(path, "```\n" + this.buildReport() + "\n```\n");
-      new import_obsidian.Notice(`\u8BCA\u65AD\u62A5\u544A\u5DF2\u5B58\u5230 ${path}`, 8e3);
+      new import_obsidian2.Notice(`\u8BCA\u65AD\u62A5\u544A\u5DF2\u5B58\u5230 ${path}`, 8e3);
       await this.app.workspace.getLeaf(true).openFile(file);
     } catch (error) {
-      new import_obsidian.Notice(`\u4FDD\u5B58\u8BCA\u65AD\u62A5\u544A\u5931\u8D25\uFF1A${this.errorMessage(error)}`, 8e3);
+      new import_obsidian2.Notice(`\u4FDD\u5B58\u8BCA\u65AD\u62A5\u544A\u5931\u8D25\uFF1A${this.errorMessage(error)}`, 8e3);
     }
   }
   buildReport() {
@@ -1036,6 +1275,73 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       ...this.diagnostics
     ].join("\n");
   }
+  /* ---------------- 新版本与更新说明 ---------------- */
+  /* 不会自动消失，直到点按钮或点通知本身。这次打开里同一个版本只弹一次；下次打开还会再提醒。 */
+  remindIfNewer() {
+    const info = this.updates?.newer();
+    if (!info || this.updates.isIgnored(info.version) || this.remindedVersion === info.version) return;
+    this.remindedVersion = info.version;
+    const message = createFragment((f) => {
+      f.createDiv({ cls: "just-type-update-title", text: `Just Type \u6709\u65B0\u7248\u672C ${info.version}\uFF08\u5F53\u524D ${PLUGIN_VERSION}\uFF09` });
+      if (info.headline) f.createDiv({ cls: "just-type-update-headline", text: info.headline });
+      const actions = f.createDiv({ cls: "just-type-update-actions" });
+      actions.createEl("button", { text: "\u53BB\u66F4\u65B0", cls: "mod-cta" }).addEventListener("click", () => this.openPluginPage());
+      actions.createEl("button", { text: "\u7A0D\u540E\u63D0\u9192" });
+    });
+    new import_obsidian2.Notice(message, 0);
+  }
+  /* 走 Obsidian 自己的插件页，由用户点「更新」完成官方流程。插件不下载、不安装自己。 */
+  openPluginPage() {
+    window.open(PLUGIN_PAGE_URI);
+  }
+  notesSince(previous) {
+    return RELEASE_NOTES.filter((note) => compareVersions(note.version, previous) > 0 && compareVersions(note.version, PLUGIN_VERSION) <= 0);
+  }
+  /* 升级后第一次启动：把平时的「已就绪」换成这一条，不额外多弹。 */
+  showUpgradedNotice(previous) {
+    const notes = this.notesSince(previous);
+    if (!notes.length) {
+      new import_obsidian2.Notice(this.readyHint());
+      return;
+    }
+    const message = createFragment((f) => {
+      f.createDiv({ cls: "just-type-update-title", text: `Just Type \u5DF2\u66F4\u65B0\u5230 ${PLUGIN_VERSION}\uFF0C\u5DF2\u5C31\u7EEA` });
+      f.createDiv({ cls: "just-type-update-link", text: "\u70B9\u8FD9\u91CC\u770B\u66F4\u65B0\u4E86\u4EC0\u4E48" });
+    });
+    const notice = new import_obsidian2.Notice(message, 12e3);
+    notice.messageEl?.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} \u66F4\u65B0\u4E86\u4EC0\u4E48`).open());
+  }
+  openWhatsNew() {
+    const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
+    new WhatsNewModal(this.app, notes, "Just Type \u6700\u8FD1\u66F4\u65B0").open();
+  }
+  hasPendingUpdate() {
+    const info = this.updates?.newer();
+    return Boolean(info && !this.updates.isIgnored(info.version));
+  }
+  ignorePendingUpdate() {
+    const info = this.updates?.newer();
+    if (!info) return;
+    this.updates.ignore(info.version);
+    new import_obsidian2.Notice(`\u4E0D\u518D\u63D0\u9192 ${info.version}\u3002\u4EE5\u540E\u51FA\u4E86\u66F4\u65B0\u7684\u7248\u672C\u8FD8\u4F1A\u63D0\u9192\u3002`, 6e3);
+  }
+  async checkUpdateNow() {
+    if (!this.updates) return;
+    const pending = new import_obsidian2.Notice("\u6B63\u5728\u68C0\u67E5 Just Type \u65B0\u7248\u672C\u2026", 0);
+    const got = await this.updates.maybeCheck(true);
+    pending.hide();
+    if (!got) {
+      new import_obsidian2.Notice("\u68C0\u67E5\u5931\u8D25\uFF1A\u7F51\u7EDC\u8FDE\u4E0D\u4E0A\u7248\u672C\u4FE1\u606F\u5730\u5740\u3002\u4E0D\u5F71\u54CD\u8F93\u5165\uFF0C\u7A0D\u540E\u4F1A\u81EA\u52A8\u518D\u8BD5\u3002", 8e3);
+      return;
+    }
+    const info = this.updates.newer();
+    if (!info) {
+      new import_obsidian2.Notice(`Just Type ${PLUGIN_VERSION} \u5DF2\u662F\u6700\u65B0\u7248\u3002`, 5e3);
+      return;
+    }
+    this.remindedVersion = void 0;
+    this.remindIfNewer();
+  }
   /* ---------------- UI ---------------- */
   registerCommands() {
     this.addCommand({
@@ -1064,7 +1370,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
         } else {
           this.traceRawKeys = false;
         }
-        new import_obsidian.Notice(this.traceEnabled ? "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5F00\uFF08\u5185\u5BB9\u5DF2\u8131\u654F\uFF09\u3002\u590D\u73B0\u95EE\u9898\u540E\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u3002" : "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5173\u3002");
+        new import_obsidian2.Notice(this.traceEnabled ? "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5F00\uFF08\u5185\u5BB9\u5DF2\u8131\u654F\uFF09\u3002\u590D\u73B0\u95EE\u9898\u540E\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u3002" : "\u6309\u952E\u4E8B\u4EF6\u8BB0\u5F55\uFF1A\u5173\u3002");
       }
     });
     this.addCommand({
@@ -1077,7 +1383,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
           this.eventTrace = [];
           this.eventCounts = {};
         }
-        new import_obsidian.Notice(this.traceRawKeys ? "\u26A0\uFE0F \u8BB0\u5F55\u5DF2\u5305\u542B\u4F60\u5B9E\u9645\u6572\u4E0B\u7684\u6309\u952E\u5185\u5BB9\uFF0C\u62A5\u544A\u5916\u53D1\u524D\u8BF7\u901A\u8BFB\u3002\u518D\u8FD0\u884C\u4E00\u6B21\u6B64\u547D\u4EE4\u53EF\u5173\u95ED\u3002" : "\u5DF2\u6062\u590D\u8131\u654F\u8BB0\u5F55\u3002", 8e3);
+        new import_obsidian2.Notice(this.traceRawKeys ? "\u26A0\uFE0F \u8BB0\u5F55\u5DF2\u5305\u542B\u4F60\u5B9E\u9645\u6572\u4E0B\u7684\u6309\u952E\u5185\u5BB9\uFF0C\u62A5\u544A\u5916\u53D1\u524D\u8BF7\u901A\u8BFB\u3002\u518D\u8FD0\u884C\u4E00\u6B21\u6B64\u547D\u4EE4\u53EF\u5173\u95ED\u3002" : "\u5DF2\u6062\u590D\u8131\u654F\u8BB0\u5F55\u3002", 8e3);
       }
     });
     this.addCommand({
@@ -1085,10 +1391,20 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       name: "\u8BCA\u65AD\uFF1A\u628A\u62A5\u544A\u5B58\u8FDB Vault (save report)",
       callback: () => void this.saveReport()
     });
+    this.addCommand({
+      id: "whats-new",
+      name: "\u67E5\u770B\u6700\u8FD1\u66F4\u65B0 (what's new)",
+      callback: () => this.openWhatsNew()
+    });
+    this.addCommand({
+      id: "check-update",
+      name: "\u68C0\u67E5\u65B0\u7248\u672C (check update)",
+      callback: () => void this.checkUpdateNow()
+    });
   }
   createControls() {
     this.ribbon = this.addRibbonIcon("languages", "Just Type\uFF1A\u5207\u6362\u4E2D\u82F1\u6587", () => this.toggle());
-    if (!import_obsidian.Platform.isMobile) {
+    if (!import_obsidian2.Platform.isMobile) {
       this.status = this.addStatusBarItem();
       this.status.addClass("just-type-status");
       this.status.addEventListener("click", () => this.toggle());
@@ -1112,7 +1428,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       const view = this.activeEditor();
       if (view) this.renderEmojiPanel(view);
     }
-    new import_obsidian.Notice(`Just Type\uFF1A${MODE_NOTICE[next]}`);
+    new import_obsidian2.Notice(`Just Type\uFF1A${MODE_NOTICE[next]}`);
   }
   updateStatus(override) {
     const active = this.mode !== "english" && this.ready;
@@ -1124,7 +1440,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     if (this.ribbon) {
       this.ribbon.toggleClass("is-enabled", active);
       this.ribbon.setAttribute("aria-label", `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
-      (0, import_obsidian.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
+      (0, import_obsidian2.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
     }
   }
   createPanel() {
@@ -1206,7 +1522,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     else if (document.activeElement !== sink.el) sink.el.focus();
   }
   activeEditor() {
-    return this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    return this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
   }
   skip(reason) {
     this.skipCounts[reason] = (this.skipCounts[reason] ?? 0) + 1;
@@ -1291,7 +1607,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
     if (event.key.length !== 1) return;
     if (!this.isInputTarget(event.target)) return;
     this.imeTookOver = false;
-    new import_obsidian.Notice(this.readyHint(), 6e3);
+    new import_obsidian2.Notice(this.readyHint(), 6e3);
   }
   onKeydown(event) {
     this.toggleArmed = this.isToggleKeyAlone(event);
@@ -1326,7 +1642,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
       console.error("RIME input failed", error);
       this.log(`process("${rimeKey}") \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
       this.cancelComposition();
-      new import_obsidian.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
+      new import_obsidian2.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
 \u53EF\u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 8e3);
     });
   }
@@ -1559,7 +1875,7 @@ var JustTypePlugin = class extends import_obsidian.Plugin {
           console.error("RIME input failed", error);
           this.log(`selectCandidate(${index}) \u5931\u8D25\uFF1A${this.errorMessage(error)}`);
           this.cancelComposition();
-          new import_obsidian.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
+          new import_obsidian2.Notice(`Just Type \u8F93\u5165\u5931\u8D25\uFF1A${this.errorMessage(error)}
 \u53EF\u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 8e3);
         });
       });
