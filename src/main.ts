@@ -10,7 +10,7 @@ import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 
-const PLUGIN_VERSION = "0.7.23";
+const PLUGIN_VERSION = "0.7.24";
 const INIT_TIMEOUT_MS = 45000;
 const MAX_TRACE = 60;
 const REPORT_FOLDER = "就打个字诊断";

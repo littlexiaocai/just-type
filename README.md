@@ -1,12 +1,21 @@
 # Just Type · 就打个字
 
-## 最近更新 · What's new（0.7.23）
+## 最近更新 · What's new（0.7.24）
+
+- **完整词库（约 187 万条，来自雾凇拼音）**：打开后先用内置词库，马上能打字；后台自动下载约 26 MB，下好后在你停手时自动换上，之后离线可用。三字词、四字成语明显更准
+- **国内从 npmmirror 下载**，不用翻墙；每一段都核对校验值，下载中断下次接着下
+- **笔记右上角显示下载进度**；设置「完整词库」里可以暂停、只用基础词库或删除已下载的数据
+- **换词库不影响**输入法已经记住的你的用词习惯
+
+- **Full dictionary (about 1.87 million entries, from rime-ice)**: typing works right away with the built-in dictionary; about 26 MB downloads in the background and is switched in when you pause typing, then works offline. Three-character words and four-character idioms are much more accurate
+- **Downloads from npmmirror** (reachable in mainland China); every segment is checksum-verified and an interrupted download resumes next time
+- **Progress shows at the top right of the note**; under **完整词库** in settings you can pause, keep only the base dictionary, or delete the download
+- **Switching dictionaries keeps** what the input method has learned from you
+
+### 0.7.23
 
 - **选过的词会被更可靠地记住**：以前最后一次上屏的词，如果之后 Obsidian 被系统关闭，可能没被记住（键盘和手指点选都会），现在上屏后立即保存
 - **词库更新立即生效**：插件更新词库后不再被旧缓存挡住（为完整词库做准备）
-
-- **Learning is saved reliably**: the last word you picked could be forgotten if Obsidian was closed by the system right after (both keyboard and tap selection); it is now saved as soon as it's committed
-- **Dictionary updates take effect immediately**: an old cache no longer shadows updated dictionaries (groundwork for the full dictionary)
 
 ### 0.7.22
 
