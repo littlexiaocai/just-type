@@ -14,12 +14,14 @@ const pkg = {
   version: manifest.version,
   description: "Version info for the Just Type IME Obsidian plugin (read by its update reminder). Not a library.",
   license: "AGPL-3.0-or-later",
+  author: "littlexiaocai",
   homepage: "https://github.com/littlexiaocai/just-type",
-  repository: { type: "git", url: "https://github.com/littlexiaocai/just-type.git" },
+  repository: { type: "git", url: "git+https://github.com/littlexiaocai/just-type.git" },
   files: ["manifest.json", "update.json"],
   justType: { headline: update.headline }
 };
 writeFileSync("npm/package.json", JSON.stringify(pkg, null, 2) + "\n");
 copyFileSync("manifest.json", "npm/manifest.json");
 copyFileSync("update.json", "npm/update.json");
+copyFileSync("LICENSE", "npm/LICENSE");
 console.log(`npm/package.json → just-type-ime@${pkg.version}「${update.headline}」`);
