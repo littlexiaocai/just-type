@@ -365,10 +365,16 @@ var DEFAULT_CONFIG = {
   activationFailureLimit: 2,
   offlineProbeMs: 5e3,
   offlineProbeSlowMs: 6e4,
-  probeTimeoutMs: 1e4
+  probeTimeoutMs: 1e4,
+  slowSegmentMs: 1e4,
+  maxHedges: 3
 };
 var HISTORY_LIMIT = 60;
 var WEB_LOCK = "just-type-dict-task";
+function hostOf(url) {
+  const m = /^https?:\/\/([^/]+)/.exec(url);
+  return m ? m[1].replace(/^registry\./, "") : url;
+}
 function stamp(at) {
   const d = new Date(at);
   const p = (n) => String(n).padStart(2, "0");
@@ -413,6 +419,11 @@ var DictManager = class {
     this.backingOff = false;
     /** 另一个窗口拿着任务锁。 */
     this.elsewhere = false;
+    /** 这次任务：「两边同时要」用了几次、各下载源下了几段、开始时间。 */
+    this.hedges = 0;
+    this.hedgeOff = false;
+    this.fromSource = [];
+    this.taskStartedAt = 0;
   }
   /* ---------------- 状态 ---------------- */
   /** 记一条下载事件：写进插件的诊断日志，也存进跨重启保留的最近事件。 */
@@ -476,6 +487,7 @@ var DictManager = class {
       activeId: this.state.activeId,
       resuming: this.resuming,
       elsewhere: this.elsewhere,
+      source: hostOf(this.catalog.urls[this.sourceIndex % this.catalog.urls.length]),
       history: this.state.history ?? []
     };
   }
@@ -701,7 +713,11 @@ var DictManager = class {
       }
       this.startHeartbeat();
       this.present = await this.store.segmentIndexes(this.catalog.id);
-      this.record(`\u5B8C\u6574\u8BCD\u5E93\u4EFB\u52A1\u5F00\u59CB\uFF08${reason}\uFF09\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5`);
+      this.record(`\u5B8C\u6574\u8BCD\u5E93\u4EFB\u52A1\u5F00\u59CB\uFF08${reason}\uFF09\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5\uFF0C\u5148\u4ECE ${hostOf(this.catalog.urls[this.sourceIndex % this.catalog.urls.length])} \u4E0B`);
+      this.hedges = 0;
+      this.hedgeOff = false;
+      this.fromSource = this.catalog.urls.map(() => 0);
+      this.taskStartedAt = this.now();
       while (gen === this.generation) {
         const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
         if (missing.length) {
@@ -729,7 +745,8 @@ var DictManager = class {
           this.state.lastError = void 0;
           this.phase = "ready";
           await this.save();
-          this.record("\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5E76\u6821\u9A8C\u5B8C\u6210\uFF0C\u7B49\u5F85\u542F\u7528");
+          const bySource = this.catalog.urls.map((u, i) => `${hostOf(u)} ${this.fromSource[i] ?? 0} \u6BB5`).join("\uFF0C");
+          this.record(`\u5B8C\u6574\u8BCD\u5E93\u4E0B\u8F7D\u5E76\u6821\u9A8C\u5B8C\u6210\uFF0C\u7B49\u5F85\u542F\u7528\uFF08\u672C\u6B21 ${Math.round((this.now() - this.taskStartedAt) / 1e3)} \u79D2\uFF1B${bySource}\uFF09`);
           this.emit();
           return;
         }
@@ -762,8 +779,75 @@ var DictManager = class {
       window.clearTimeout(timer);
     }
   }
+  /**
+   * 下一段。先从当前下载源要；超过 slowSegmentMs 还没到，就同时向另一个源要同一段，谁先到（且校验通过）用谁，
+   * 之后都从快的那个源下。这不算失败、不消耗重试次数；每次最多多花一段（2 MB）流量。
+   * 另一个源也没更快（网络本身慢）就不再这样做，免得白白多花流量。
+   */
   async fetchSegment(index, gen) {
-    const url = this.catalog.urls[this.sourceIndex % this.catalog.urls.length];
+    const n = this.catalog.urls.length;
+    const first = this.sourceIndex % n;
+    const result = await this.raceSegment(first, index, gen);
+    if (gen !== this.generation) return;
+    if (result.src !== first) {
+      this.sourceIndex = result.src;
+      this.record(`${hostOf(this.catalog.urls[first])} \u592A\u6162\uFF0C\u7B2C ${index + 1} \u6BB5\u4ECE ${hostOf(this.catalog.urls[result.src])} \u5148\u4E0B\u5B8C\uFF0C\u4E4B\u540E\u6539\u4ECE\u5B83\u4E0B`);
+    }
+    if (result.full) {
+      for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
+        if (gen !== this.generation) return;
+        const [s, e] = this.segmentRange(i);
+        await this.storeVerified(i, result.body.slice(s, e + 1));
+      }
+      this.fromSource[result.src] = (this.fromSource[result.src] ?? 0) + this.catalog.tarball.segments.length;
+      return;
+    }
+    await this.storeSegment(index, result.body);
+    this.fromSource[result.src] = (this.fromSource[result.src] ?? 0) + 1;
+  }
+  raceSegment(first, index, gen) {
+    const n = this.catalog.urls.length;
+    const second = (first + 1) % n;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let hedged = false;
+      let pending = 1;
+      const finish = () => {
+        settled = true;
+        if (timer !== void 0) window.clearTimeout(timer);
+      };
+      const onOk = (result) => {
+        if (settled) return;
+        finish();
+        if (hedged && result.src === first && !this.hedgeOff) {
+          this.hedgeOff = true;
+          this.record(`\u4E24\u4E2A\u4E0B\u8F7D\u6E90\u4E00\u6837\u6162\uFF08\u7F51\u7EDC\u672C\u8EAB\u6162\uFF09\uFF0C\u8FD9\u6B21\u4E0D\u518D\u540C\u65F6\u5411\u4E24\u8FB9\u8981`);
+        }
+        resolve(result);
+      };
+      const onError = (error) => {
+        pending -= 1;
+        if (settled) return;
+        if (!hedged || pending === 0) {
+          finish();
+          if (hedged && !this.hedgeOff) this.hedgeOff = true;
+          reject(error instanceof Error ? error : new FetchFailure("network", String(error)));
+        }
+      };
+      const timer = n > 1 && !this.hedgeOff && this.hedges < this.config.maxHedges ? window.setTimeout(() => {
+        if (settled || gen !== this.generation) return;
+        hedged = true;
+        pending += 1;
+        this.hedges += 1;
+        this.record(`\u7B2C ${index + 1} \u6BB5\u4ECE ${hostOf(this.catalog.urls[first])} \u4E0B\u4E86 ${Math.round(this.config.slowSegmentMs / 1e3)} \u79D2\u8FD8\u6CA1\u5B8C\uFF0C\u540C\u65F6\u5411 ${hostOf(this.catalog.urls[second])} \u8981`);
+        this.requestSegment(second, index).then(onOk, onError);
+      }, this.config.slowSegmentMs) : void 0;
+      this.requestSegment(first, index).then(onOk, onError);
+    });
+  }
+  /** 向一个下载源要一段并核对。只有长度、哈希都对才算拿到，坏数据不能「抢先」。 */
+  async requestSegment(src, index) {
+    const url = this.catalog.urls[src];
     const [start, end] = this.segmentRange(index);
     let res;
     try {
@@ -772,7 +856,6 @@ var DictManager = class {
       if (error instanceof FetchFailure) throw error;
       throw new FetchFailure("network", `\u8FDE\u63A5\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
     }
-    if (gen !== this.generation) return;
     const { status } = res;
     if (status === 429) {
       const retryAfter = Number(res.headers["retry-after"] ?? res.headers["Retry-After"]);
@@ -780,25 +863,18 @@ var DictManager = class {
     }
     if (status === 404 || status === 403 || status === 410) throw new FetchFailure("missing", `\u6587\u4EF6\u4E0D\u5728\u8FD9\u4E2A\u5730\u5740\uFF08HTTP ${status}\uFF09\uFF0C\u53EF\u80FD\u955C\u50CF\u8FD8\u6CA1\u540C\u6B65`);
     if (status >= 500) throw new FetchFailure("server", `\u670D\u52A1\u5668\u9519\u8BEF\uFF08HTTP ${status}\uFF09`);
-    if (status === 200 && res.body.byteLength === this.catalog.tarball.bytes) {
-      for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
-        if (gen !== this.generation) return;
-        const [s, e] = this.segmentRange(i);
-        await this.storeVerified(i, res.body.slice(s, e + 1));
-      }
-      return;
-    }
+    if (status === 200 && res.body.byteLength === this.catalog.tarball.bytes) return { src, body: res.body, full: true };
     if (status !== 206 && status !== 200) throw new FetchFailure("server", `\u610F\u5916\u7684\u54CD\u5E94\uFF08HTTP ${status}\uFF09`);
     const expected = end - start + 1;
     if (res.body.byteLength !== expected) {
       const type = res.headers["content-type"] ?? res.headers["Content-Type"] ?? "";
       throw new FetchFailure("integrity", `\u957F\u5EA6\u4E0D\u7B26\uFF1A\u6536\u5230 ${res.body.byteLength} \u5B57\u8282\uFF0C\u5E94\u4E3A ${expected}${/html/i.test(type) ? "\uFF08\u670D\u52A1\u5668\u8FD4\u56DE\u4E86\u7F51\u9875\uFF0C\u4E0D\u662F\u8BCD\u5E93\u6570\u636E\uFF09" : ""}`);
     }
-    await this.storeVerified(index, res.body);
+    if (await sha256Hex(res.body) !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `\u7B2C ${index + 1} \u6BB5\u6821\u9A8C\u4E0D\u7B26`);
+    return { src, body: res.body, full: false };
   }
-  async storeVerified(index, body) {
-    const hash = await sha256Hex(body);
-    if (hash !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `\u7B2C ${index + 1} \u6BB5\u6821\u9A8C\u4E0D\u7B26`);
+  /** 保存已核对过的一段。每存好一段就是一个检查点。 */
+  async storeSegment(index, body) {
     try {
       await this.store.putSegment(this.catalog.id, index, body);
     } catch (error) {
@@ -806,6 +882,11 @@ var DictManager = class {
     }
     this.present.add(index);
     this.emit();
+  }
+  async storeVerified(index, body) {
+    const hash = await sha256Hex(body);
+    if (hash !== this.catalog.tarball.segments[index]) throw new FetchFailure("integrity", `\u7B2C ${index + 1} \u6BB5\u6821\u9A8C\u4E0D\u7B26`);
+    await this.storeSegment(index, body);
   }
   /** 返回 true 表示本轮还能继续（已按退避等待过）；false 表示本轮结束。 */
   async handleFailure(error, gen) {
@@ -1154,7 +1235,7 @@ function describeDict(status, ctx) {
     case "downloading":
       return {
         chip: `\u5B8C\u6574\u8BCD\u5E93 ${size}`,
-        detail: `\u6B63\u5728\u540E\u53F0\u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF1A${size}\u3002\u53EF\u7EE7\u7EED\u8F93\u5165\uFF0C\u57FA\u7840\u8BCD\u5E93\u7167\u5E38\u5DE5\u4F5C\u3002` + (status.resuming ? "\u63A5\u7740\u4E0A\u6B21\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u7EE7\u7EED\uFF0C\u4E0D\u4ECE\u5934\u91CD\u4E0B\u3002" : ""),
+        detail: `\u6B63\u5728\u540E\u53F0\u4ECE ${status.source} \u4E0B\u8F7D\u5B8C\u6574\u8BCD\u5E93\uFF1A${size}\u3002\u53EF\u7EE7\u7EED\u8F93\u5165\uFF0C\u57FA\u7840\u8BCD\u5E93\u7167\u5E38\u5DE5\u4F5C\u3002\u56FD\u5185\u6E90\u6162\u65F6\u4F1A\u81EA\u52A8\u6539\u4ECE\u56FD\u5916\u6E90\u4E0B\u3002` + (status.resuming ? "\u63A5\u7740\u4E0A\u6B21\u5DF2\u4E0B\u8F7D\u5E76\u6838\u5BF9\u8FC7\u7684\u90E8\u5206\u7EE7\u7EED\uFF0C\u4E0D\u4ECE\u5934\u91CD\u4E0B\u3002" : ""),
         attention: false
       };
     case "verifying":
@@ -1777,7 +1858,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "0.7.24";
-var BUILD_TIME = true ? "2026/9/27 23:08:25" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/27 23:22:09" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2836,7 +2917,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     const time = (at) => at ? new Date(at).toLocaleString() : "\u65E0";
     return [
       `  \u76EE\u6807 ${s.catalog.id}\uFF5Ctgz ${s.catalog.tarball.bytes} B\uFF5Csha256 ${s.catalog.tarball.sha256}`,
-      `  \u4E0B\u8F7D\u5730\u5740 ${s.catalog.urls.join(" \u2192 ")}${USING_DEV_URLS ? "\uFF08\u6D4B\u8BD5\u5730\u5740\uFF09" : ""}`,
+      `  \u4E0B\u8F7D\u5730\u5740 ${s.catalog.urls.join(" \u2192 ")}${USING_DEV_URLS ? "\uFF08\u6D4B\u8BD5\u5730\u5740\uFF09" : ""}\uFF5C\u5F53\u524D ${s.source}`,
       `  \u9636\u6BB5 ${s.phase}\uFF5C\u5DF2\u6838\u5BF9 ${s.segmentsDone}/${s.segmentsTotal} \u6BB5\uFF08${s.bytesDone}/${s.bytesTotal} B\uFF09\uFF5C\u63A5\u7740\u4E0B ${s.resuming}`,
       `  \u6682\u505C\u610F\u56FE ${s.pausedReason ?? "\u65E0"}\uFF5C\u4E0B\u6B21\u81EA\u52A8\u91CD\u8BD5 ${time(s.nextRetryAt)}`,
       `  \u6700\u8FD1\u9519\u8BEF ${s.error ? `${s.error.kind}\uFF1A${s.error.message}` : "\u65E0"}`,

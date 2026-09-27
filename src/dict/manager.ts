@@ -641,7 +641,7 @@ export class DictManager {
         if (!hedged || pending === 0) {
           finish();
           if (hedged && !this.hedgeOff) this.hedgeOff = true;
-          reject(error);
+          reject(error instanceof Error ? error : new FetchFailure("network", String(error)));
         }
       };
       const timer: number | undefined = n > 1 && !this.hedgeOff && this.hedges < this.config.maxHedges
