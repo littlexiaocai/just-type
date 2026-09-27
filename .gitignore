@@ -11,3 +11,7 @@ npm/package.json
 npm/manifest.json
 npm/update.json
 npm/LICENSE
+
+# 完整词库构建（scripts/build-dict.mjs）的中间产物与打包结果
+/.dict-build/
+/dict/

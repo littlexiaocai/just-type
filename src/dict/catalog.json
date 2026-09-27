@@ -1,0 +1,58 @@
+{
+  "id": "just-type-dict@1.0.0",
+  "name": "just-type-dict",
+  "version": "1.0.0",
+  "label": "完整词库（雾凇拼音 字表＋基础＋扩充＋腾讯）",
+  "source": "iDvel/rime-ice@9e66b0729083b37d217312294f6d516c8d7234be",
+  "license": "GPL-3.0",
+  "compiler": "librime 1.17.0_2",
+  "tarball": {
+    "filename": "just-type-dict-1.0.0.tgz",
+    "bytes": 26112060,
+    "sha256": "2e893a5fde94494968cc7cfec9aecc2d3f5e05a99eb93605c92c10d5844408c4",
+    "integrity": "sha512-AZ+AgBU4STWAiwgRV4k1/2KRUkNf6cTO9aSnQajI/81XvKdXlujjUMdi284Rl4t89vU12tiMOt0AFkCiXkw6sQ==",
+    "segmentBytes": 2097152,
+    "segments": [
+      "3045aaec00c29219fede2d404aed6fda51ace5866dfbc3ade58de47c3734d27b",
+      "9fee97442fabfe60e7758f297c3c97503f9863963372c978a18352961361c89a",
+      "7a037f3efd8485cfc51fb45bef35a097694fe2a571a57c00b5a879b7c852bf09",
+      "5da27ec2f90dd78a7c7c678d7218ade682e6cb5a4ac4b1f6c517f46202424229",
+      "f4bbbc3629c96300bf7dc12a4083665e28eb8c8a95d0eed4d4948810f29760f3",
+      "82347ab2057f400779339e3fdf8f95a5f42b32dd81156879fd8eb525b3604da8",
+      "d477f694b7284b26a076fcf01dd164def208896734585fc7c0a0aa7117b5bfe7",
+      "cc93eb830272b443f47763ea912977a3a23e46f391780e5ca8c9b2c48b556a15",
+      "2dacb3d9cda35dd0b2cdadd461eff385f87117ceedff2031dd8ac583e2a80719",
+      "f509d5d1e3adbc2e81f28b3c5419daec671673b2c9fc0790152f7d3fcbd1c8e9",
+      "5227214db7b63396100c540ba1f021fc5a24b5cfc02ef78f587a7f1455a66811",
+      "51d6040be0ecd81d9c2c4f8d2c744a2dfe95330702f573f3b11f84a5844f77e5",
+      "64a402b7926e9848e1f422a5880f83f6355386209663e98788d1dd8157c001b8"
+    ]
+  },
+  "urls": [
+    "https://registry.npmmirror.com/just-type-dict/-/just-type-dict-1.0.0.tgz",
+    "https://registry.npmjs.org/just-type-dict/-/just-type-dict-1.0.0.tgz"
+  ],
+  "files": [
+    {
+      "name": "pinyin_simp.table.bin",
+      "bytes": 60628232,
+      "sha256": "de1b872f7e5b0df5193994b6602597cdc706b76de4e835132bcbb848cc4fff7b"
+    },
+    {
+      "name": "pinyin_simp.prism.bin",
+      "bytes": 30136,
+      "sha256": "59bbb53ff5bfa66c1f07b45b0c632a4124d47dce9359a2c5d65858bb9b18cb24"
+    },
+    {
+      "name": "pinyin_simp.reverse.bin",
+      "bytes": 57300,
+      "sha256": "1bc620a95be0f3fc2f04c7ca9835bea103c4971c7a0eb1f837dd5c019d9c4fa0"
+    }
+  ],
+  "sourceHashes": {
+    "cn_dicts/8105.dict.yaml": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+    "cn_dicts/base.dict.yaml": "19f6f96f5dfe553545f36c979001a12e3f3c0316f4e23f4382960a13e93e7550",
+    "cn_dicts/ext.dict.yaml": "f3843fecd2ec69ab823360383e8a07b4a69f4189133a87186f1702b350c1db2e",
+    "cn_dicts/tencent.dict.yaml": "858a641cef8b22d5c7966efcada3332c780ef4ac7b188318d221b450e673eca5"
+  }
+}
