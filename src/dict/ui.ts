@@ -51,6 +51,10 @@ export function describeDict(status: DictStatus, ctx: DictUiContext): DictDescri
     return { chip: "正在切回基础词库…", detail: "正在切回基础词库。学习记录不受影响。", attention: false };
   }
 
+  if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
+    return { chip: "完整词库 另一窗口下载中", detail: "另一个 Obsidian 窗口正在下载完整词库，这里等它下完直接使用，不重复下载。", attention: false };
+  }
+
   switch (status.phase) {
     case "active":
       return {

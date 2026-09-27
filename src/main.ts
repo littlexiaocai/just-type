@@ -812,10 +812,10 @@ export default class JustTypePlugin extends Plugin {
     try {
       const files = await dict.extractInstalled();
       if (!files) {
-        this.log("完整词库校验未通过，这次用基础词库，稍后自动补下");
+        this.dictLog("完整词库校验未通过，这次用基础词库，稍后自动补下");
         return undefined;
       }
-      this.log(`完整词库取出并校验完成（${Date.now() - t0}ms）`);
+      this.dictLog(`完整词库取出并校验完成（${Date.now() - t0}ms）`);
       const assets = await this.fullAssets(files);
       await dict.beginActivation();
       try {
@@ -823,6 +823,7 @@ export default class JustTypePlugin extends Plugin {
         await dict.endActivation(true);
         this.engineDict = "full";
         this.loadedDict = fullDictIdentity(dict.catalog);
+        this.dictLog(`启动即用完整词库（取出校验＋加载共 ${Date.now() - t0}ms）`);
         this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
         return client;
       } catch (error) {
@@ -831,7 +832,7 @@ export default class JustTypePlugin extends Plugin {
         throw error;
       }
     } catch (error) {
-      this.log(`完整词库启用失败，改用基础词库：${this.errorMessage(error)}`);
+      this.dictLog(`完整词库启用失败，改用基础词库：${this.errorMessage(error)}`);
       return undefined;
     }
   }
@@ -865,6 +866,12 @@ export default class JustTypePlugin extends Plugin {
       this.noticeOnce(`error-${status.error.kind}`, describeDict(status, this.dictContext()).detail, 12000);
     }
     this.syncEngine();
+  }
+
+  /** 与词库切换有关的日志：同时记进跨重启保留的下载事件。 */
+  private dictLog(message: string): void {
+    if (this.dict) this.dict.record(message);
+    else this.log(message);
   }
 
   /** 一次性提示：同一个词库版本只提示一次，跨重启记住。 */
@@ -947,7 +954,7 @@ export default class JustTypePlugin extends Plugin {
         assets = await loadLocalAssets();
       }
     } catch (error) {
-      this.log(`准备切换到${label}失败：${this.errorMessage(error)}`);
+      this.dictLog(`准备切换到${label}失败：${this.errorMessage(error)}`);
       this.switching = undefined;
       this.refreshDict();
       return;
@@ -974,10 +981,10 @@ export default class JustTypePlugin extends Plugin {
         await dict!.endActivation(true);
         this.noticeOnce("activated", "完整词库已就绪，之后可离线使用");
       }
-      this.log(`已切换到${label}（准备＋切换共 ${Date.now() - t0}ms）`);
+      this.dictLog(`已切换到${label}（准备＋切换共 ${Date.now() - t0}ms）`);
     } catch (error) {
       const message = this.errorMessage(error);
-      this.log(`切换到${label}失败：${message}`);
+      this.dictLog(`切换到${label}失败：${message}`);
       if (target === "full") {
         this.activationFailedThisRun = true;
         await dict!.endActivation(false, message);
@@ -1041,9 +1048,9 @@ export default class JustTypePlugin extends Plugin {
       };
       await walk("/rime");
       await store.putBackup(key, { at: Date.now(), plugin: PLUGIN_VERSION, files });
-      this.log(`学习记录已备份：${Object.keys(files).length} 个文件，${bytes} B`);
+      this.dictLog(`学习记录已备份：${Object.keys(files).length} 个文件，${bytes} B`);
     } catch (error) {
-      this.log(`学习记录备份失败（不影响切换）：${this.errorMessage(error)}`);
+      this.dictLog(`学习记录备份失败（不影响切换）：${this.errorMessage(error)}`);
     }
   }
 
@@ -1327,7 +1334,10 @@ export default class JustTypePlugin extends Plugin {
       `  阶段 ${s.phase}｜已核对 ${s.segmentsDone}/${s.segmentsTotal} 段（${s.bytesDone}/${s.bytesTotal} B）｜接着下 ${s.resuming}`,
       `  暂停意图 ${s.pausedReason ?? "无"}｜下次自动重试 ${time(s.nextRetryAt)}`,
       `  最近错误 ${s.error ? `${s.error.kind}：${s.error.message}` : "无"}`,
-      `  引擎在用 ${this.engineDict}｜切换中 ${this.switching ?? "否"}｜这次启用失败过 ${this.activationFailedThisRun}｜记录的启用版本 ${s.activeId ?? "无"}`
+      `  引擎在用 ${this.engineDict}｜切换中 ${this.switching ?? "否"}｜这次启用失败过 ${this.activationFailedThisRun}｜记录的启用版本 ${s.activeId ?? "无"}｜另一窗口在下 ${s.elsewhere}`,
+      `  设备在线 navigator.onLine = ${String(navigator.onLine)}`,
+      `  最近下载事件（跨重启保留，最多 60 条）：`,
+      ...(s.history.length ? s.history.map((line) => `    ${line}`) : ["    （无）"])
     ];
   }
 

@@ -62,6 +62,10 @@ export interface DictStatus {
   activeId?: string;
   /** 启动时已有部分分段，本次是接着下而不是从头下。 */
   resuming: boolean;
+  /** 另一个 Obsidian 窗口正在下载，这里等它下完直接用。 */
+  elsewhere: boolean;
+  /** 最近的下载事件（跨重启保留），供诊断报告。 */
+  history: string[];
 }
 
 export interface RangeResponse {
@@ -111,6 +115,18 @@ interface PersistedState {
   activeId?: string;
   /** 已经提示过的一次性通知。 */
   notified?: Record<string, boolean>;
+  /** 最近的下载事件，跨重启保留：测试时不用每次退出前都存报告。只有状态和错误类别，没有输入内容。 */
+  history?: string[];
+}
+
+const HISTORY_LIMIT = 60;
+/** 浏览器自带的锁：持有它的页面或进程一结束就自动释放。 */
+const WEB_LOCK = "just-type-dict-task";
+
+function stamp(at: number): string {
+  const d = new Date(at);
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 interface LockRecord { owner: string; at: number }
@@ -148,6 +164,12 @@ export class DictManager {
   private rerun = false;
   /** 正在退避等待的任务：取消时立刻叫醒，不用等满两分钟。 */
   private wake?: () => void;
+  /** 当前处在一轮之内的退避等待（不是 30 分钟冷却）：联网、回到前台时可以提前再试。 */
+  private backingOff = false;
+  /** 另一个窗口拿着任务锁。 */
+  private elsewhere = false;
+  /** 用 Web Locks 拿到的锁：调用即释放。 */
+  private releaseWebLock?: () => void;
 
   constructor(
     private store: DictStore,
@@ -159,6 +181,13 @@ export class DictManager {
   ) {}
 
   /* ---------------- 状态 ---------------- */
+
+  /** 记一条下载事件：写进插件的诊断日志，也存进跨重启保留的最近事件。 */
+  record(message: string): void {
+    this.log(message);
+    this.state.history = [...(this.state.history ?? []), `${stamp(this.now())} ${message}`].slice(-HISTORY_LIMIT);
+    void this.save();
+  }
 
   async init(): Promise<void> {
     try {
@@ -173,12 +202,13 @@ export class DictManager {
     const act = this.state.activation;
     if (act) {
       this.state.activation = undefined;
-      this.log(`检测到上次启用 ${act.id} 未完成，记为一次失败`);
+      this.record(`检测到上次启用 ${act.id} 未完成，记为一次失败`);
       if (act.id === this.catalog.id) this.recordActivationFailure("上次启用途中退出");
     }
     this.present = await this.store.segmentIndexes(this.catalog.id);
     this.resuming = this.present.size > 0 && this.present.size < this.catalog.tarball.segments.length;
     this.phase = this.derivePhase();
+    this.record(`启动：阶段 ${this.phase}，已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段${this.state.nextRetryAt ? `，下次重试 ${stamp(this.state.nextRetryAt)}` : ""}`);
     await this.save();
     this.emit();
   }
@@ -218,7 +248,9 @@ export class DictManager {
       error: err && (this.phase === "waiting" || this.phase === "error") ? { kind: err.kind, message: err.message } : undefined,
       pausedReason: this.state.paused,
       activeId: this.state.activeId,
-      resuming: this.resuming
+      resuming: this.resuming,
+      elsewhere: this.elsewhere,
+      history: this.state.history ?? []
     };
   }
 
@@ -323,6 +355,8 @@ export class DictManager {
     if (this.disposed) return;
     if (this.running) {
       if (reason === "manual") { this.rerun = true; this.cancel(); }
+      // 一轮之内的退避等待中联网了、回到前台了：提前结束等待马上再试（仍算这一轮的次数，30 分钟冷却不受影响）。
+      else if ((reason === "online" || reason === "foreground") && this.backingOff) this.wake?.();
       return;
     }
     if (this.state.paused) return;
@@ -372,7 +406,26 @@ export class DictManager {
 
   /* ---------------- 任务锁 ---------------- */
 
+  /**
+   * 同一台设备同一时间只有一个下载任务。优先用 Web Locks：持有者（窗口、进程）一结束锁就自动释放，
+   * iPad 上划掉 Obsidian 再打开能立刻接着下。没有这个接口时退回 IndexedDB 租约＋心跳，过期后接管。
+   */
   private async acquireLock(): Promise<boolean> {
+    const locks = (navigator as Navigator & { locks?: LockManager }).locks;
+    if (locks && typeof locks.request === "function") {
+      const release = await new Promise<(() => void) | null>((resolve) => {
+        locks.request(WEB_LOCK, { ifAvailable: true }, (lock) => {
+          if (!lock) {
+            resolve(null);
+            return undefined;
+          }
+          return new Promise<void>((done) => resolve(done));
+        }).catch(() => resolve(null));
+      });
+      if (!release) return false;
+      this.releaseWebLock = release;
+      return true;
+    }
     const now = this.now();
     const lock = await this.store.updateMeta<LockRecord | undefined>("lock", (old) => {
       if (!old || old.owner === this.owner || now - old.at > this.config.lockStaleMs) return { owner: this.owner, at: now };
@@ -383,6 +436,7 @@ export class DictManager {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    if (this.releaseWebLock) return; // Web Locks 不需要心跳
     this.heartbeat = window.setInterval(() => {
       void this.store.updateMeta<LockRecord | undefined>("lock", (old) => (old?.owner === this.owner ? { owner: this.owner, at: this.now() } : old)).catch(() => undefined);
     }, this.config.heartbeatMs);
@@ -393,6 +447,11 @@ export class DictManager {
   }
 
   private async releaseLock(): Promise<void> {
+    if (this.releaseWebLock) {
+      this.releaseWebLock();
+      this.releaseWebLock = undefined;
+      return;
+    }
     try {
       await this.store.updateMeta<LockRecord | undefined>("lock", (old) => (old?.owner === this.owner ? undefined : old));
     } catch { /* 锁会自己过期 */ }
@@ -405,19 +464,23 @@ export class DictManager {
     this.running = true;
     try {
       if (!(await this.acquireLock())) {
-        this.log("另一个 Obsidian 窗口正在下载完整词库，这里不重复下载");
+        if (!this.elsewhere) this.record("另一个 Obsidian 窗口正在下载完整词库，这里不重复下载");
+        this.elsewhere = true;
+        this.emit();
         this.armTimer(this.config.lockStaleMs);
         return;
       }
+      if (this.elsewhere) { this.elsewhere = false; this.emit(); }
       this.startHeartbeat();
       this.present = await this.store.segmentIndexes(this.catalog.id);
-      this.log(`完整词库任务开始（${reason}），已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段`);
+      this.record(`完整词库任务开始（${reason}），已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段`);
 
       while (gen === this.generation) {
         const missing = this.catalog.tarball.segments.map((_, i) => i).filter((i) => !this.present.has(i));
         if (missing.length) {
           // 离线信号只当提示：定时器到点时照样试一次，免得永远卡在误判的离线里。
           if (!navigator.onLine && reason !== "timer") {
+            if (this.state.lastError?.kind !== "offline") this.record("设备离线，等联网后自动继续（不计入重试次数）");
             this.setWaiting({ kind: "offline", message: "设备离线，联网后自动继续" }, undefined);
             this.armTimer(5 * 60_000);
             return;
@@ -444,7 +507,7 @@ export class DictManager {
           this.state.lastError = undefined;
           this.phase = "ready";
           await this.save();
-          this.log("完整词库下载并校验完成，等待启用");
+          this.record("完整词库下载并校验完成，等待启用");
           this.emit();
           return;
         }
@@ -534,7 +597,14 @@ export class DictManager {
   /** 返回 true 表示本轮还能继续（已按退避等待过）；false 表示本轮结束。 */
   private async handleFailure(error: unknown, gen: number): Promise<boolean> {
     const failure = error instanceof FetchFailure ? error : new FetchFailure("network", String(error));
-    this.log(`完整词库下载失败：${failure.kind} ${failure.message}`);
+    this.record(`下载失败：${failure.kind} ${failure.message}（navigator.onLine=${String(navigator.onLine)}）`);
+
+    // 请求失败时设备已离线：这是网络没了，不是下载源的问题，不消耗重试次数，等联网（或 5 分钟后）再试。
+    if ((failure.kind === "network" || failure.kind === "timeout") && !navigator.onLine) {
+      this.setWaiting({ kind: "offline", message: "设备离线，联网后自动继续" }, undefined);
+      this.armTimer(5 * 60_000);
+      return false;
+    }
 
     if (failure.kind === "storage") {
       this.state.lastError = { kind: "storage", message: "存储空间不足或无法写入，释放空间后在设置里点「立即重试」", at: this.now() };
@@ -555,6 +625,7 @@ export class DictManager {
       // 一轮用完：持久冷却，下次打开或回到前台时到期才开新一轮。
       const cooldown = Math.max(this.config.cooldownMs, failure.retryAfterMs ?? 0);
       this.state.attempts = 0;
+      this.record(`这一轮重试用完，冷却到 ${stamp(this.now() + cooldown)}`);
       this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + cooldown);
       return false;
     }
@@ -563,7 +634,12 @@ export class DictManager {
     const jittered = base * (1 + (Math.random() * 2 - 1) * this.config.jitter);
     const delay = Math.max(jittered, failure.retryAfterMs ?? 0);
     this.setWaiting({ kind: failure.kind, message: failure.message }, this.now() + delay);
-    await this.sleep(delay);
+    this.backingOff = true;
+    try {
+      await this.sleep(delay);
+    } finally {
+      this.backingOff = false;
+    }
     return gen === this.generation;
   }
 
@@ -593,7 +669,7 @@ export class DictManager {
     if (bad.length) {
       for (const i of bad) { await this.store.deleteSegment(this.catalog.id, i); this.present.delete(i); }
       this.state.activeId = undefined;
-      this.log(`完整词库有 ${bad.length} 段缺失或损坏，已丢弃，稍后自动补下`);
+      this.record(`完整词库有 ${bad.length} 段缺失或损坏，已丢弃，稍后自动补下`);
       this.phase = this.derivePhase();
       await this.save();
       this.emit();
@@ -626,7 +702,7 @@ export class DictManager {
     this.state.lastError = { kind, message: reason, at: this.now() };
     this.state.activeId = undefined;
     this.phase = "error";
-    this.log(`完整词库 ${this.catalog.id} 已隔离：${reason}`);
+    this.record(`完整词库 ${this.catalog.id} 已隔离：${reason}`);
   }
 
   /* ---------------- 启用记录 ---------------- */
