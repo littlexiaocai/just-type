@@ -253,3 +253,17 @@
 .just-type-help-disable {
   margin-top: 0.4em;
 }
+
+/* 使用说明里的示意图：设置页那一行的样子，只看不点 */
+.just-type-help-figure {
+  margin: 0.5em 0;
+  padding: 0 0.8em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  pointer-events: none;
+}
+
+.just-type-help-figure .setting-item {
+  border-top: none;
+}

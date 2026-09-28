@@ -529,6 +529,8 @@ class WhatsNewModal extends Modal {
  * 使用说明。这台设备第一次装好时弹一次（欢迎）；之后在设置页顶部和命令面板里随时能打开。
  * 内容就是上手最少要知道的几件事，加上遇到问题先看什么。切换键跟着设置变。
  */
+const DISABLE_HERE_DESC = "只影响这台设备：Just Type 不接管按键、不弹提示，其他设备照常使用。请用这里的开关，不要关已安装插件列表里的那个开关。";
+
 /** 使用说明里「在这台设备上停用」按钮要用到的：是否显示、现在是否已停用、怎么停用。 */
 interface DeviceControls {
   showButton: boolean;
@@ -550,6 +552,12 @@ class HelpModal extends Modal {
     how.append("（设置 → 左侧栏「第三方插件」分组下的「Just Type IME」），在里面打开「");
     how.createEl("strong", { text: "在这台设备上停用" });
     how.append("」。只影响这台设备，其他设备照常使用。");
+    // 示意图：照设置页里那一行画出来（跟随主题，不用截图），只看不点。
+    const figure = box.createDiv({ cls: "just-type-help-figure" });
+    new Setting(figure)
+      .setName("在这台设备上停用 Just Type")
+      .setDesc(DISABLE_HERE_DESC)
+      .addToggle((toggle) => toggle.setValue(false));
     const warn = box.createEl("p", { text: "⚠️ " });
     warn.createEl("strong", { text: "不要" });
     warn.append("关闭「第三方插件 → 已安装插件」列表里 Just Type IME 旁边的那个开关。那个开关会随 Obsidian 同步，关掉后，其他设备上的 Just Type 也可能被一起关掉。");
@@ -568,7 +576,6 @@ class HelpModal extends Modal {
     this.setTitle(this.welcome ? "欢迎使用 Just Type · 就打个字" : "Just Type · 使用说明");
     const el = this.contentEl;
     el.addClass("just-type-help");
-    this.renderScope(el);
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     // 最要紧的是前两条：系统键盘在英文 ABC 时 Just Type 才工作，切到中文拼音它就让出按键。
     const steps: [string, string][] = [
@@ -587,6 +594,7 @@ class HelpModal extends Modal {
       item.createDiv({ cls: "just-type-help-desc", text: desc });
     }
 
+    this.renderScope(el);
     el.createDiv({ cls: "just-type-help-heading", text: "遇到问题" });
     const faq = el.createEl("ul", { cls: "just-type-help-notes" });
     faq.createEl("li", { text: key
@@ -857,7 +865,7 @@ export default class JustTypePlugin extends Plugin {
 
   renderDisableSetting(setting: Setting): () => void {
     setting.setName("在这台设备上停用 Just Type");
-    setting.setDesc("只影响这台设备：Just Type 不接管按键、不弹提示，其他设备照常使用。请用这里的开关，不要关已安装插件列表里的那个开关。");
+    setting.setDesc(DISABLE_HERE_DESC);
     let toggle: ToggleComponent | undefined;
     setting.addToggle((t) => {
       toggle = t;

@@ -1932,7 +1932,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 17:13:11" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 17:24:34" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2299,6 +2299,7 @@ var WhatsNewModal = class extends import_obsidian3.Modal {
     this.contentEl.empty();
   }
 };
+var DISABLE_HERE_DESC = "\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF1AJust Type \u4E0D\u63A5\u7BA1\u6309\u952E\u3001\u4E0D\u5F39\u63D0\u793A\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002\u8BF7\u7528\u8FD9\u91CC\u7684\u5F00\u5173\uFF0C\u4E0D\u8981\u5173\u5DF2\u5B89\u88C5\u63D2\u4EF6\u5217\u8868\u91CC\u7684\u90A3\u4E2A\u5F00\u5173\u3002";
 var HelpModal = class extends import_obsidian3.Modal {
   constructor(app, welcome, toggleKey, device) {
     super(app);
@@ -2315,6 +2316,8 @@ var HelpModal = class extends import_obsidian3.Modal {
     how.append("\uFF08\u8BBE\u7F6E \u2192 \u5DE6\u4FA7\u680F\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6\u300D\u5206\u7EC4\u4E0B\u7684\u300CJust Type IME\u300D\uFF09\uFF0C\u5728\u91CC\u9762\u6253\u5F00\u300C");
     how.createEl("strong", { text: "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" });
     how.append("\u300D\u3002\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002");
+    const figure = box.createDiv({ cls: "just-type-help-figure" });
+    new import_obsidian3.Setting(figure).setName("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type").setDesc(DISABLE_HERE_DESC).addToggle((toggle) => toggle.setValue(false));
     const warn = box.createEl("p", { text: "\u26A0\uFE0F " });
     warn.createEl("strong", { text: "\u4E0D\u8981" });
     warn.append("\u5173\u95ED\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6 \u2192 \u5DF2\u5B89\u88C5\u63D2\u4EF6\u300D\u5217\u8868\u91CC Just Type IME \u65C1\u8FB9\u7684\u90A3\u4E2A\u5F00\u5173\u3002\u90A3\u4E2A\u5F00\u5173\u4F1A\u968F Obsidian \u540C\u6B65\uFF0C\u5173\u6389\u540E\uFF0C\u5176\u4ED6\u8BBE\u5907\u4E0A\u7684 Just Type \u4E5F\u53EF\u80FD\u88AB\u4E00\u8D77\u5173\u6389\u3002");
@@ -2332,7 +2335,6 @@ var HelpModal = class extends import_obsidian3.Modal {
     this.setTitle(this.welcome ? "\u6B22\u8FCE\u4F7F\u7528 Just Type \xB7 \u5C31\u6253\u4E2A\u5B57" : "Just Type \xB7 \u4F7F\u7528\u8BF4\u660E");
     const el = this.contentEl;
     el.addClass("just-type-help");
-    this.renderScope(el);
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     const steps = [
       ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D\uFF0CJust Type \u63A5\u624B", "\u53EF\u4EE5\u8F93\u5165\u62FC\u97F3\u4E2D\u6587\u6216\u82F1\u6587\u3002"],
@@ -2347,6 +2349,7 @@ var HelpModal = class extends import_obsidian3.Modal {
       item.createDiv({ cls: "just-type-help-title", text: title });
       item.createDiv({ cls: "just-type-help-desc", text: desc });
     }
+    this.renderScope(el);
     el.createDiv({ cls: "just-type-help-heading", text: "\u9047\u5230\u95EE\u9898" });
     const faq = el.createEl("ul", { cls: "just-type-help-notes" });
     faq.createEl("li", { text: key ? `\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u5230\u4E2D\u6587\u3002` : "\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u5230\u4E2D\u6587\u3002" });
@@ -2574,7 +2577,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   }
   renderDisableSetting(setting) {
     setting.setName("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type");
-    setting.setDesc("\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF1AJust Type \u4E0D\u63A5\u7BA1\u6309\u952E\u3001\u4E0D\u5F39\u63D0\u793A\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002\u8BF7\u7528\u8FD9\u91CC\u7684\u5F00\u5173\uFF0C\u4E0D\u8981\u5173\u5DF2\u5B89\u88C5\u63D2\u4EF6\u5217\u8868\u91CC\u7684\u90A3\u4E2A\u5F00\u5173\u3002");
+    setting.setDesc(DISABLE_HERE_DESC);
     let toggle;
     setting.addToggle((t) => {
       toggle = t;
