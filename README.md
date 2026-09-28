@@ -28,7 +28,7 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 ## 怎么用 · How to use
 
-**适用于 iPad ＋ 外接键盘**，这是它要解决的场景，也是实机验证过的场景。装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
+**Just Type 专为 iPad、iPhone 外接键盘优化。在 Mac 上会和第三方输入法（如微信、搜狗）产生冲突，请在电脑端关闭 Just Type。** 装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
 
 1. **系统键盘切到英文 ABC，Just Type 接手**：可以输入拼音中文或英文。
 2. **系统键盘切到中文拼音，Just Type 退出**：按键归还系统输入法。
@@ -48,7 +48,7 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 ---
 
-**iPad + hardware keyboard** is the setup this plugin is made for and tested on. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
+**Just Type is made for iPad and iPhone with a hardware keyboard.** On a Mac it conflicts with third-party input methods (such as WeChat or Sogou), so please turn Just Type off on desktop. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
 
 1. Switch the system keyboard to **English ABC** and Just Type takes over: type Pinyin Chinese or English.
 2. Switch the system keyboard to **Chinese Pinyin** and Just Type steps aside: keys go back to the system IME.

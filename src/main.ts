@@ -530,6 +530,7 @@ class HelpModal extends Modal {
     this.setTitle(this.welcome ? "欢迎使用 Just Type · 就打个字" : "Just Type · 使用说明");
     const el = this.contentEl;
     el.addClass("just-type-help");
+    el.createEl("p", { cls: "just-type-help-scope", text: "Just Type 专为 iPad、iPhone 外接键盘优化。在 Mac 上会和第三方输入法（如微信、搜狗）产生冲突，请在电脑端关闭 Just Type。" });
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     // 最要紧的是前两条：系统键盘在英文 ABC 时 Just Type 才工作，切到中文拼音它就让出按键。
     const steps: [string, string][] = [

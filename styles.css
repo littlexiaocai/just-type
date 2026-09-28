@@ -236,3 +236,12 @@
   margin-top: 1em;
   font-weight: var(--font-semibold);
 }
+
+.just-type-help-scope {
+  margin-top: 0;
+  padding: 0.5em 0.8em;
+  border-left: 3px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+}

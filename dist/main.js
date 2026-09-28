@@ -1900,7 +1900,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 16:25:52" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 16:47:29" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2271,6 +2271,7 @@ var HelpModal = class extends import_obsidian3.Modal {
     this.setTitle(this.welcome ? "\u6B22\u8FCE\u4F7F\u7528 Just Type \xB7 \u5C31\u6253\u4E2A\u5B57" : "Just Type \xB7 \u4F7F\u7528\u8BF4\u660E");
     const el = this.contentEl;
     el.addClass("just-type-help");
+    el.createEl("p", { cls: "just-type-help-scope", text: "Just Type \u4E13\u4E3A iPad\u3001iPhone \u5916\u63A5\u952E\u76D8\u4F18\u5316\u3002\u5728 Mac \u4E0A\u4F1A\u548C\u7B2C\u4E09\u65B9\u8F93\u5165\u6CD5\uFF08\u5982\u5FAE\u4FE1\u3001\u641C\u72D7\uFF09\u4EA7\u751F\u51B2\u7A81\uFF0C\u8BF7\u5728\u7535\u8111\u7AEF\u5173\u95ED Just Type\u3002" });
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     const steps = [
       ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D\uFF0CJust Type \u63A5\u624B", "\u53EF\u4EE5\u8F93\u5165\u62FC\u97F3\u4E2D\u6587\u6216\u82F1\u6587\u3002"],
