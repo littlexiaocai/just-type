@@ -1900,7 +1900,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 16:05:02" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 16:25:52" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2288,9 +2288,8 @@ var HelpModal = class extends import_obsidian3.Modal {
     el.createDiv({ cls: "just-type-help-heading", text: "\u9047\u5230\u95EE\u9898" });
     const faq = el.createEl("ul", { cls: "just-type-help-notes" });
     faq.createEl("li", { text: key ? `\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u5230\u4E2D\u6587\u3002` : "\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u5230\u4E2D\u6587\u3002" });
-    faq.createEl("li", { text: key ? `\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u56DE\u4E2D\u6587\u3002` : "\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u56DE\u4E2D\u6587\u3002" });
-    const last = faq.createEl("li", { text: "\u8FD8\u662F\u4E0D\u884C\uFF1A\u5728\u547D\u4EE4\u9762\u677F\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\uFF0C\u628A\u62A5\u544A\u53D1\u5230 " });
-    last.createEl("a", { text: "GitHub \u53CD\u9988\u9875", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
+    const last = faq.createEl("li", { text: "\u8FD8\u662F\u4E0D\u884C\uFF1A\u8BF7\u53D1\u90AE\u4EF6\u5230 " });
+    last.createEl("a", { text: "xxyybear@gmail.com", attr: { href: "mailto:xxyybear@gmail.com" } });
     last.append("\u3002");
     if (this.welcome) el.createEl("p", { cls: "just-type-help-footer", text: "\u4EE5\u540E\u53EF\u4EE5\u5728 \u8BBE\u7F6E \u2192 Just Type IME \u2192 \u4F7F\u7528\u8BF4\u660E \u518D\u770B\u3002" });
     const actions = el.createDiv({ cls: "just-type-diag-actions" });
@@ -3387,6 +3386,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   onKeyup(event) {
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
+    if (event.isComposing || this.imeTookOver) return;
     if (!this.ready || !this.isInputTarget(event.target)) return;
     this.toggle();
   }
@@ -3435,7 +3435,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     new import_obsidian3.Notice(this.readyHint(), 6e3);
   }
   onKeydown(event) {
-    this.toggleArmed = this.isToggleKeyAlone(event);
+    this.toggleArmed = this.isToggleKeyAlone(event) && !isSystemImeComposing(event) && !this.imeTookOver;
     this.keydownSeen += 1;
     const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : event.target === null ? "null" : event.target.constructor.name;
     this.lastKeyNote = `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} keyCode=${this.redactKeyCode(event.keyCode)} isComposing=${event.isComposing} target=[${target}]`;

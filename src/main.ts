@@ -553,9 +553,8 @@ class HelpModal extends Modal {
     faq.createEl("li", { text: key
       ? `打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 ${key} 切到中文。`
       : "打中文还是卡：确认系统键盘切到了「英文 ABC」，再用命令「切换中英文 (toggle)」切到中文。" });
-    faq.createEl("li", { text: key ? `打出来是英文：单独按一下 ${key} 切回中文。` : "打出来是英文：用命令「切换中英文 (toggle)」切回中文。" });
-    const last = faq.createEl("li", { text: "还是不行：在命令面板运行「诊断报告 (report)」，把报告发到 " });
-    last.createEl("a", { text: "GitHub 反馈页", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
+    const last = faq.createEl("li", { text: "还是不行：请发邮件到 " });
+    last.createEl("a", { text: "xxyybear@gmail.com", attr: { href: "mailto:xxyybear@gmail.com" } });
     last.append("。");
 
     if (this.welcome) el.createEl("p", { cls: "just-type-help-footer", text: "以后可以在 设置 → Just Type IME → 使用说明 再看。" });
@@ -1812,6 +1811,7 @@ export default class JustTypePlugin extends Plugin {
   private onKeyup(event: KeyboardEvent): void {
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
+    if (event.isComposing || this.imeTookOver) return;
     if (!this.ready || !this.isInputTarget(event.target)) return;
     this.toggle();
   }
@@ -1866,7 +1866,9 @@ export default class JustTypePlugin extends Plugin {
   }
 
   private onKeydown(event: KeyboardEvent): void {
-    this.toggleArmed = this.isToggleKeyAlone(event);
+    // 系统输入法在工作时（已提示「Just Type 已停止工作」），切换键归系统输入法：微信、搜狗等也用 Shift 切中英，
+    // Just Type 再跟着切、弹「Just Type：英文」会误导。切回英文 ABC、正常打字后自动恢复。
+    this.toggleArmed = this.isToggleKeyAlone(event) && !isSystemImeComposing(event) && !this.imeTookOver;
     this.keydownSeen += 1;
     const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : (event.target === null ? "null" : event.target.constructor.name);
     this.lastKeyNote = `key=${this.redactKey(event.key)} code=${this.redactCode(event.code)} keyCode=${this.redactKeyCode(event.keyCode)} isComposing=${event.isComposing} target=[${target}]`;
