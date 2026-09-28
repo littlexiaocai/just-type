@@ -411,6 +411,11 @@ class JustTypeSettingTab extends PluginSettingTab {
 
   getSettingDefinitions(): SettingDefinitionItem[] {
     return [{
+      name: "使用说明",
+      desc: "怎么切换中英文、选词、打表情，遇到问题先看这里。",
+      aliases: ["help", "guide", "how to use", "帮助", "说明", "用法", "怎么用"],
+      action: () => this.plugin.openHelp()
+    }, {
       name: "中英文切换键",
       desc: "单独按一下这个键（中间不夹别的键）在中文和英文之间切换。命令面板里的「切换中英文 (toggle)」始终可用，也可以在 Obsidian 的快捷键设置里自行绑定。",
       aliases: ["toggle", "Shift", "chinese", "english"],
@@ -446,6 +451,11 @@ class JustTypeSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("使用说明")
+      .setDesc("怎么切换中英文、选词、打表情，遇到问题先看这里。")
+      .addButton((button) => button.setButtonText("查看").onClick(() => this.plugin.openHelp()));
 
     new Setting(containerEl)
       .setName("中英文切换键")
@@ -500,6 +510,56 @@ class WhatsNewModal extends Modal {
     }
     const actions = this.contentEl.createDiv({ cls: "just-type-diag-actions" });
     actions.createEl("button", { text: "知道了", cls: "mod-cta" }).addEventListener("click", () => this.close());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/*
+ * 使用说明。这台设备第一次装好时弹一次（欢迎）；之后在设置页顶部和命令面板里随时能打开。
+ * 内容就是上手最少要知道的几件事，加上遇到问题先看什么。切换键跟着设置变。
+ */
+class HelpModal extends Modal {
+  constructor(app: App, private welcome: boolean, private toggleKey: ToggleKey, private dictSize: string) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.setTitle(this.welcome ? "欢迎使用 Just Type · 就打个字" : "Just Type · 使用说明");
+    const el = this.contentEl;
+    el.addClass("just-type-help");
+    const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
+    const steps: [string, string][] = [
+      ["系统键盘切到「英文 ABC」", "Just Type 接手，直接打拼音就是中文。"],
+      key
+        ? [`单独按一下 ${key}，切换中英文`, "不用来回切系统键盘；切换键可以在设置里改。"]
+        : ["用命令「切换中英文 (toggle)」切换中英文", "也可以在设置里指定一个切换键。"],
+      ["选词", "空格选第一个，数字键选第几个，也可以用手指点。"],
+      ["表情", "仍用键盘上的 🌐 地球键调出。"]
+    ];
+    const list = el.createEl("ol", { cls: "just-type-help-steps" });
+    for (const [title, desc] of steps) {
+      const item = list.createEl("li");
+      item.createDiv({ cls: "just-type-help-title", text: title });
+      item.createDiv({ cls: "just-type-help-desc", text: desc });
+    }
+    const notes = el.createEl("ul", { cls: "just-type-help-notes" });
+    notes.createEl("li", { text: "系统键盘切到中文拼音时，Just Type 会让出按键并弹出提示；切回英文 ABC 就恢复。" });
+    notes.createEl("li", { text: `第一次使用会在后台下载词库（${this.dictSize}），下载时照常打字。` });
+
+    el.createDiv({ cls: "just-type-help-heading", text: "遇到问题" });
+    const faq = el.createEl("ul", { cls: "just-type-help-notes" });
+    faq.createEl("li", { text: "打字没反应：确认系统键盘是「英文 ABC」，光标在笔记正文或标题里。" });
+    faq.createEl("li", { text: key ? `打出来是英文：单独按一下 ${key} 切回中文。` : "打出来是英文：用命令「切换中英文 (toggle)」切回中文。" });
+    const last = faq.createEl("li", { text: "还是不行：在命令面板运行「诊断报告 (report)」，把报告发到 " });
+    last.createEl("a", { text: "GitHub 反馈页", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
+    last.append("。");
+
+    if (this.welcome) el.createEl("p", { cls: "just-type-help-footer", text: "以后可以在 设置 → Just Type IME → 使用说明 再看。" });
+    const actions = el.createDiv({ cls: "just-type-diag-actions" });
+    actions.createEl("button", { text: this.welcome ? "开始打字" : "知道了", cls: "mod-cta" }).addEventListener("click", () => this.close());
   }
 
   onClose(): void {
@@ -667,6 +727,15 @@ export default class JustTypePlugin extends Plugin {
       if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
       else new Notice(this.readyHint());
       this.startDictTasks();
+      // 这台设备第一次装好：弹一次使用说明。更新不弹（更新时弹的是「这次更新了什么」）。
+      // 放在最后、单独兜住：说明窗出任何问题都不能影响输入和词库下载。
+      if (this.updates?.isFirstRun()) {
+        try {
+          this.openHelp(true);
+        } catch (error) {
+          this.log(`使用说明打不开：${this.errorMessage(error)}`);
+        }
+      }
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
@@ -1437,6 +1506,10 @@ export default class JustTypePlugin extends Plugin {
     new Notice(message, 12000);
   }
 
+  openHelp(welcome = false): void {
+    new HelpModal(this.app, welcome, this.settings.toggleKey, approxSize(CATALOG)).open();
+  }
+
   openWhatsNew(): void {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
     new WhatsNewModal(this.app, notes, "Just Type 最近更新").open();
@@ -1533,6 +1606,11 @@ export default class JustTypePlugin extends Plugin {
       id: "dictionary-redownload",
       name: "重新下载词库（排查问题用）(redownload dictionary)",
       callback: () => void this.redownloadDict()
+    });
+    this.addCommand({
+      id: "help",
+      name: "使用说明 (help)",
+      callback: () => this.openHelp()
     });
     this.addCommand({
       id: "whats-new",

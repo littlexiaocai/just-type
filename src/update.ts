@@ -111,6 +111,7 @@ async function fetchJson(url: string): Promise<unknown> {
 export class UpdateChecker {
   private state: UpdateState;
   private checking?: Promise<boolean>;
+  private firstRun = false;
 
   constructor(private app: App, private current: string, private log: (message: string) => void) {
     this.state = this.load();
@@ -152,6 +153,7 @@ export class UpdateChecker {
   /** 记下本次运行的版本。返回「升级前的版本」；首次在这台设备运行、没升级或降级都返回 undefined。 */
   recordRun(): string | undefined {
     const previous = this.state.lastRunVersion;
+    this.firstRun = previous === undefined;
     this.state.lastRunVersion = this.current;
     // 已经装上的版本不用再提醒。
     if (this.state.latest && compareVersions(this.state.latest.version, this.current) <= 0) this.state.latest = undefined;
@@ -166,6 +168,11 @@ export class UpdateChecker {
     const latest = this.state.latest;
     if (!latest || compareVersions(latest.version, this.current) <= 0) return undefined;
     return latest;
+  }
+
+  /** 这台设备上第一次运行本插件（从没记录过运行版本）：弹一次使用说明。 */
+  isFirstRun(): boolean {
+    return this.firstRun;
   }
 
   /** 上次成功拿到版本信息的时间；从没成功过是 undefined。 */

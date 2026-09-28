@@ -1,5 +1,9 @@
 # Just Type · 就打个字
 
+在 Obsidian 里用 iPad 外接键盘顺畅地打中文：插件自带拼音输入法，绕开系统拼音输入法在 Obsidian 里的卡顿。
+
+Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
+
 ## 最近更新 · What's new（1.0.0）
 
 ### 🎉 词库大升级，打字更畅快：从约 6.5 万条扩充到约 187 万条
@@ -20,40 +24,42 @@ Three-character words, four-character idioms and everyday phrases come up right 
 - **Switching dictionaries keeps** what the input method has learned from you
 - **Simpler settings**: normally just the version; Pinyin is always shown at the cursor, like WeChat and Sogou input methods
 
-### 0.7.23
+更早的更新见 [Releases](https://github.com/littlexiaocai/just-type/releases) · Earlier changes: [Releases](https://github.com/littlexiaocai/just-type/releases)
 
-- **选过的词会被更可靠地记住**：以前最后一次上屏的词，如果之后 Obsidian 被系统关闭，可能没被记住（键盘和手指点选都会），现在上屏后立即保存
-- **词库更新立即生效**：插件更新词库后不再被旧缓存挡住（为完整词库做准备）
+## 怎么用 · How to use
 
-### 0.7.22
+**适用于 iPad ＋ 外接键盘**，这是它要解决的场景，也是实机验证过的场景。装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
 
-- 修复社区插件目录自动审核报的错误（兼容更早版本的 Obsidian），功能与 0.7.21 相同
+1. **系统键盘切到英文 ABC，Just Type 接手**：直接打拼音就是中文。
+2. **单独按一下 Shift，切换中英文**：不用来回切系统键盘。切换键可以在插件设置里改成 Control / Option / Command。
+3. **选词**：空格选第一个，数字键选第几个，也可以用手指点。
+4. **表情**：仍用键盘上的 🌐 地球键调出。能否调出取决于键盘列表里是否启用了「表情符号」，以及 设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号。
 
-### 0.7.21
+系统键盘切到中文拼音时，Just Type 会让出按键，按键归系统输入法。接手和退出时都会弹出提示：
 
-- **有新版本时会提醒你**：打开 Obsidian 时右上角提醒，点「去更新」直接跳到插件页（设置里可关闭，见下方「联网说明」）
-- **更新后告诉你改了什么**：升级后第一次打开，弹一次「这次更新了什么」
+- 接手时：「Just Type 已就绪——按 Shift 在中英文之间切换」
+- 退出时：「系统键盘切到中文了，Just Type 已停止工作——按键现在归系统输入法」
 
-- **Update reminder**: when a new version is out, a notice appears as Obsidian opens; "去更新" jumps to the plugin page (can be turned off; see "Network use" below)
-- **What's new after updating**: the first launch after an update shows what changed
+第一次使用会在后台下载词库（约 26 MB），下载时照常打字，之后不用联网。
 
-### 0.7.20
+**遇到问题**
 
-- **笔记标题里也能打中文了**：新建笔记时直接在标题处打拼音、选词，按 Shift 切换中英文
-- **手指点候选词能上屏了**：iPad 上正文和标题都可以直接点选
-- **顿号**：中文模式下按 `/` 或 `\` 直接打出「、」
-- **中文标点更完整**：？！：单独输入时也是中文标点
+- 打字没反应：确认系统键盘是「英文 ABC」，光标在笔记正文或标题里
+- 打出来是英文：单独按一下 Shift 切回中文
+- 还是不行：在命令面板运行「诊断报告 (report)」，把报告发到 [GitHub Issues](https://github.com/littlexiaocai/just-type/issues)
 
 ---
 
-- **Type Chinese in note titles**: type Pinyin right in the inline title of a new note; Shift switches Chinese / English there too
-- **Tap to select candidates**: tapping a candidate on iPad now commits it, in both the note body and the title
-- **Enumeration comma**: in Chinese mode, `/` or `\` types 「、」 directly
-- **More Chinese punctuation**: ？！： are full-width even when typed on their own
+**iPad + hardware keyboard** is the setup this plugin is made for and tested on. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
 
-更早的更新见 [Releases](https://github.com/littlexiaocai/just-type/releases) · Earlier changes: [Releases](https://github.com/littlexiaocai/just-type/releases)
+1. Switch the system keyboard to **English ABC**. Just Type takes over; type Pinyin to get Chinese.
+2. Tap **Shift** on its own to switch Chinese and English. You can change the key to Control / Option / Command in plugin settings.
+3. **Pick a candidate** with Space (the first one), a number key, or a tap.
+4. **Emoji** still uses the 🌐 globe key. It depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
 
-## Why
+When the system keyboard is switched to Chinese Pinyin, Just Type steps aside and tells you so. The first launch downloads the dictionary (about 26 MB) in the background while you keep typing; after that it works offline.
+
+## 为什么做这个项目 · Why
 
 Just Type is an Obsidian Chinese IME for iPad hardware keyboards. It bypasses the long-standing lag of the system Pinyin IME inside Obsidian.
 
@@ -73,34 +79,6 @@ Just Type 是一个面向 iPad 外接键盘的 Obsidian 中文输入插件，用
 
 拼音引擎用 [RIME](https://rime.im/)，通过 [My RIME](https://github.com/LibreService/my_rime) 的 WebAssembly 构建。
 
-## How to use
-
-**iPad + hardware keyboard.** That is the problem this plugin exists to solve, and the setup that has been tested on a real device.
-
-1. Switch the system keyboard to **English ABC**. Just Type takes over — keys go to Just Type, and you can type Pinyin Chinese or English.
-2. Press **Shift** to switch Chinese and English. Tap it alone, without holding another key. You can change this key to Control / Option / Command in plugin settings.
-3. Switch the system keyboard to Pinyin, and Just Type exits — keys go to the system IME, and Just Type stops.
-4. Emoji still uses the keyboard 🌐 globe key. Whether it opens the emoji picker depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
-
-### 适用范围
-
-**iPad + 外接键盘**。这是它要解决的场景，也是实机验证过的场景。
-
-### 怎么用
-
-**1. 把系统键盘切到英文 ABC，Just Type 随即接手** — 按键归Just Type，可以输入拼音中文或英文。
-
-**2.按 Shift 切换中英文** — 单独按一下，中间不夹别的键。切换键可以在插件设置里改成 Control / Option / Command。
-
-**3. 系统键盘切到拼音，Just Type 自动退出** — 按键归系统输入法，Just Type 停止工作。
-
-两种状态 Just Type 都会主动告诉你：
-
-- 接手时：「Just Type 已就绪——按切换键在中英文之间切换」
-- 退出时：「系统键盘切到中文了，Just Type 已停止工作——按键现在归系统输入法」
-
-**4. 表情包**，延用键盘的 🌐 地球键调出表情面板。地球键能否调出表情，取决于键盘列表里是否启用了「表情符号」，以及在实体键盘里的设置（设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号）。
-
 ## Commands
 
 Command names include English aliases, so they are searchable while the system keyboard is in English.
@@ -109,8 +87,13 @@ Command names include English aliases, so they are searchable while the system k
 
 | Command | What it does | 作用 |
 |---|---|---|
+| 使用说明 (help) | Open the quick guide | 打开使用说明 |
 | 切换中英文 (toggle) | Same as Shift | 与 Shift 等价 |
 | 切换表情模式 (emoji) | Built-in offline emoji input | 插件内置的离线表情输入 |
+| 词库下载状态 (dictionary) | Dictionary download status | 词库下载的详细状态 |
+| 重新下载词库（排查问题用）(redownload dictionary) | Delete the local dictionary data and download again; learned words are kept | 删掉本机的词库数据重新下载，学习记录不受影响 |
+| 查看最近更新 (what's new) | Recent changes | 最近几个版本改了什么 |
+| 检查新版本 (check update) | Check for a new version now | 立即检查新版本 |
 | 诊断报告 (report) | Environment, init timing, key capture stats, recent trace | 环境、初始化耗时、按键捕获统计、最近事件轨迹 |
 | 诊断：把报告存进 Vault (save report) | Write a note, syncs with Obsidian Sync | 写成笔记，随 Obsidian Sync 到别的设备排查 |
 | 诊断：开始/停止记录按键事件 (trace) | Tracing is off by default | 事件轨迹默认关闭，需要排查时才开 |

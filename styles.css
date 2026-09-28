@@ -207,3 +207,32 @@
 .just-type-hidden {
   display: none;
 }
+
+/* 使用说明 */
+.just-type-help-steps {
+  padding-left: 1.4em;
+}
+
+.just-type-help-steps li {
+  margin-bottom: 0.7em;
+}
+
+.just-type-help-title {
+  font-weight: var(--font-semibold);
+}
+
+.just-type-help-desc,
+.just-type-help-notes,
+.just-type-help-footer {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.just-type-help-notes {
+  padding-left: 1.2em;
+}
+
+.just-type-help-heading {
+  margin-top: 1em;
+  font-weight: var(--font-semibold);
+}

@@ -264,6 +264,9 @@ var catalog_default = {
   }
 };
 
+// src/dict/previous-catalogs.json
+var previous_catalogs_default = [];
+
 // src/dict/tar.ts
 var ALLOWED_EXTRA = /* @__PURE__ */ new Set(["package.json", "README.md", "LICENSE"]);
 var EXTRA_LIMIT = 256 * 1024;
@@ -356,6 +359,7 @@ var DEV_URLS = true ? null : null;
 var BUILT_IN = catalog_default;
 var CATALOG = DEV_URLS ? { ...BUILT_IN, urls: DEV_URLS } : BUILT_IN;
 var USING_DEV_URLS = Boolean(DEV_URLS);
+var PREVIOUS_CATALOGS = previous_catalogs_default;
 var DEFAULT_CONFIG = {
   retryDelaysMs: [3e4, 12e4],
   jitter: 0.2,
@@ -397,13 +401,14 @@ function isStorageError(error) {
   return name === "QuotaExceededError" || /quota|space|storage/i.test(String(error?.message ?? ""));
 }
 var DictManager = class {
-  constructor(store, fetcher, catalog = CATALOG, config = DEFAULT_CONFIG, log = () => void 0, now = () => Date.now()) {
+  constructor(store, fetcher, catalog = CATALOG, config = DEFAULT_CONFIG, log = () => void 0, now = () => Date.now(), previous = PREVIOUS_CATALOGS) {
     this.store = store;
     this.fetcher = fetcher;
     this.catalog = catalog;
     this.config = config;
     this.log = log;
     this.now = now;
+    this.previous = previous;
     this.state = { v: 1 };
     this.present = /* @__PURE__ */ new Set();
     this.phase = "none";
@@ -425,6 +430,10 @@ var DictManager = class {
     this.hedgeOff = false;
     this.fromSource = [];
     this.taskStartedAt = 0;
+    /** 本机上每个旧版已有几段（只在启动时数一次；新版启用成功、清理后清空）。 */
+    this.previousPresent = /* @__PURE__ */ new Map();
+    /** 启动时本机装着旧版：新版第一次启用时提示「已更新」而不是「已下载好」。 */
+    this.previousAtStart = false;
   }
   /* ---------------- 状态 ---------------- */
   /** 记一条下载事件：写进插件的诊断日志，也存进跨重启保留的最近事件。 */
@@ -446,11 +455,18 @@ var DictManager = class {
       this.state.activation = void 0;
       this.record(`\u68C0\u6D4B\u5230\u4E0A\u6B21\u542F\u7528 ${act.id} \u672A\u5B8C\u6210\uFF0C\u8BB0\u4E3A\u4E00\u6B21\u5931\u8D25`);
       if (act.id === this.catalog.id) this.recordActivationFailure("\u4E0A\u6B21\u542F\u7528\u9014\u4E2D\u9000\u51FA");
+      else if (this.previous.some((c) => c.id === act.id)) this.quarantineId(act.id, "\u4E0A\u6B21\u542F\u7528\u9014\u4E2D\u9000\u51FA");
     }
+    for (const c of this.previous) {
+      const n = (await this.store.segmentIndexes(c.id)).size;
+      if (n) this.previousPresent.set(c.id, n);
+    }
+    this.previousAtStart = this.previousPresent.size > 0;
     this.present = await this.store.segmentIndexes(this.catalog.id);
     this.resuming = this.present.size > 0 && this.present.size < this.catalog.tarball.segments.length;
     this.phase = this.derivePhase();
-    this.record(`\u542F\u52A8\uFF1A\u9636\u6BB5 ${this.phase}\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5${this.state.nextRetryAt ? `\uFF0C\u4E0B\u6B21\u91CD\u8BD5 ${stamp(this.state.nextRetryAt)}` : ""}`);
+    const fallback = this.fallbackCatalog();
+    this.record(`\u542F\u52A8\uFF1A\u9636\u6BB5 ${this.phase}\uFF0C\u5DF2\u6709 ${this.present.size}/${this.catalog.tarball.segments.length} \u6BB5${this.state.nextRetryAt ? `\uFF0C\u4E0B\u6B21\u91CD\u8BD5 ${stamp(this.state.nextRetryAt)}` : ""}${fallback ? `\uFF1B\u672C\u673A\u6709\u53EF\u7528\u7684\u4E0A\u4E00\u7248 ${fallback.id}` : ""}`);
     await this.save();
     this.emit();
   }
@@ -466,8 +482,19 @@ var DictManager = class {
   isComplete() {
     return this.present.size === this.catalog.tarball.segments.length;
   }
-  isQuarantined() {
-    return Boolean(this.state.quarantine?.[this.catalog.id]);
+  isQuarantined(id = this.catalog.id) {
+    return Boolean(this.state.quarantine?.[id]);
+  }
+  /**
+   * 新版还不能用时可以先用的旧版：本机已有全部分段、没被停用、用户没选只用基础词库。
+   * 只数分段是否齐全；真正启用前 extractInstalled 还会逐段、逐文件核对。
+   */
+  hadPrevious() {
+    return this.previousAtStart;
+  }
+  fallbackCatalog() {
+    if (this.state.paused === "baseOnly") return void 0;
+    return this.previous.find((c) => this.previousPresent.get(c.id) === c.tarball.segments.length && !this.isQuarantined(c.id));
   }
   status() {
     const seg = this.catalog.tarball.segmentBytes;
@@ -975,22 +1002,27 @@ var DictManager = class {
    * 把已下载的分段拼回 tgz，解包，逐个核对文件 sha256。成功返回文件内容。
    * 失败时找出坏掉的分段删掉（下次只补这些），整包格式不对则隔离，不无限重下。
    */
-  async extractInstalled() {
+  async extractInstalled(catalog = this.catalog) {
+    const current = catalog.id === this.catalog.id;
     const buffers = [];
     const bad = [];
-    for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
-      const data = await this.store.getSegment(this.catalog.id, i);
-      if (!data || await sha256Hex(data) !== this.catalog.tarball.segments[i]) {
+    for (let i = 0; i < catalog.tarball.segments.length; i++) {
+      const data = await this.store.getSegment(catalog.id, i);
+      if (!data || await sha256Hex(data) !== catalog.tarball.segments[i]) {
         bad.push(i);
         continue;
       }
       buffers.push(data);
     }
     if (bad.length) {
-      for (const i of bad) {
-        await this.store.deleteSegment(this.catalog.id, i);
-        this.present.delete(i);
+      for (const i of bad) await this.store.deleteSegment(catalog.id, i);
+      if (!current) {
+        this.previousPresent.delete(catalog.id);
+        this.quarantineId(catalog.id, `${bad.length} \u6BB5\u7F3A\u5931\u6216\u635F\u574F`);
+        await this.save();
+        return null;
       }
+      for (const i of bad) this.present.delete(i);
       this.state.activeId = void 0;
       this.record(`\u5B8C\u6574\u8BCD\u5E93\u6709 ${bad.length} \u6BB5\u7F3A\u5931\u6216\u635F\u574F\uFF0C\u5DF2\u4E22\u5F03\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B`);
       this.phase = this.derivePhase();
@@ -999,14 +1031,16 @@ var DictManager = class {
       return null;
     }
     try {
-      const files = await extractTgz(new Blob(buffers).stream(), this.catalog.files);
-      for (const f of this.catalog.files) {
+      const files = await extractTgz(new Blob(buffers).stream(), catalog.files);
+      for (const f of catalog.files) {
         const body = files.get(f.name);
         if (await sha256Hex(body) !== f.sha256) throw new TarError(`${f.name} \u6821\u9A8C\u4E0D\u7B26`);
       }
       return files;
     } catch (error) {
-      this.quarantine(`\u683C\u5F0F\u6216\u5185\u5BB9\u4E0E\u6E05\u5355\u4E0D\u7B26\uFF1A${error instanceof Error ? error.message : String(error)}`, "format");
+      const reason = `\u683C\u5F0F\u6216\u5185\u5BB9\u4E0E\u6E05\u5355\u4E0D\u7B26\uFF1A${error instanceof Error ? error.message : String(error)}`;
+      if (current) this.quarantine(reason, "format");
+      else this.quarantineId(catalog.id, reason);
       await this.save();
       this.emit();
       return null;
@@ -1017,6 +1051,12 @@ var DictManager = class {
     if (files) return "ok";
     return this.isQuarantined() ? "quarantined" : "repair";
   }
+  /** 只把某个版本记为停用，不改当前任务的状态（旧版用）。 */
+  quarantineId(id, reason) {
+    this.state.quarantine = { ...this.state.quarantine ?? {}, [id]: { reason, at: this.now() } };
+    if (this.state.activeId === id) this.state.activeId = void 0;
+    this.record(`${id} \u5DF2\u505C\u7528\uFF1A${reason}`);
+  }
   quarantine(reason, kind) {
     this.state.quarantine = { ...this.state.quarantine ?? {}, [this.catalog.id]: { reason, at: this.now() } };
     this.state.lastError = { kind, message: reason, at: this.now() };
@@ -1025,18 +1065,23 @@ var DictManager = class {
     this.record(`\u5B8C\u6574\u8BCD\u5E93 ${this.catalog.id} \u5DF2\u9694\u79BB\uFF1A${reason}`);
   }
   /* ---------------- 启用记录 ---------------- */
-  /** 插件开始用完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
-  async beginActivation() {
-    this.state.activation = { id: this.catalog.id, startedAt: this.now() };
+  /** 插件开始用某个版本的完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
+  async beginActivation(id = this.catalog.id) {
+    this.state.activation = { id, startedAt: this.now() };
     await this.save();
   }
-  async endActivation(ok, message = "") {
+  async endActivation(ok, message = "", id = this.catalog.id) {
     this.state.activation = void 0;
-    if (ok) {
+    if (id !== this.catalog.id) {
+      if (ok) this.state.activeId = id;
+      else this.quarantineId(id, message || "\u5F15\u64CE\u52A0\u8F7D\u5931\u8D25");
+    } else if (ok) {
       this.state.activeId = this.catalog.id;
       this.state.activationFailures = 0;
       this.state.lastError = void 0;
       this.phase = "active";
+      if (this.previousPresent.size) this.record(`\u65B0\u7248 ${this.catalog.id} \u5DF2\u542F\u7528\uFF0C\u6E05\u7406\u65E7\u7248\u5206\u6BB5`);
+      this.previousPresent.clear();
       void this.store.pruneSegments(this.catalog.id).catch(() => void 0);
     } else {
       this.recordActivationFailure(message || "\u5F15\u64CE\u52A0\u8F7D\u5931\u8D25");
@@ -1212,38 +1257,62 @@ function dictLine(status, ctx) {
   const line = (text, chip, extra = {}) => ({ text, chip, normal: false, warn: false, ...extra });
   if (!status) return line("\u8FD9\u53F0\u8BBE\u5907\u65E0\u6CD5\u4FDD\u5B58\u8BCD\u5E93\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93", null, { warn: true });
   const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
-  if (ctx.switching === "full") return line("\u6B63\u5728\u542F\u7528\u8BCD\u5E93\u2026", "\u6B63\u5728\u542F\u7528\u8BCD\u5E93\u2026");
+  const updating = ctx.engine === "previous";
+  if (ctx.switching === "current") return updating ? line("\u6B63\u5728\u6362\u4E0A\u65B0\u7248\u8BCD\u5E93\u2026", "\u6B63\u5728\u6362\u4E0A\u65B0\u7248\u8BCD\u5E93\u2026") : line("\u6B63\u5728\u542F\u7528\u8BCD\u5E93\u2026", "\u6B63\u5728\u542F\u7528\u8BCD\u5E93\u2026");
+  if (ctx.switching === "previous") return line("\u6B63\u5728\u542F\u7528\u4E0A\u4E00\u7248\u8BCD\u5E93\u2026", "\u6B63\u5728\u542F\u7528\u4E0A\u4E00\u7248\u8BCD\u5E93\u2026");
   if (ctx.switching === "base") return line("\u6B63\u5728\u5207\u56DE\u5185\u7F6E\u8BCD\u5E93\u2026", "\u6B63\u5728\u5207\u56DE\u5185\u7F6E\u8BCD\u5E93\u2026");
   if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
     return line("\u53E6\u4E00\u4E2A Obsidian \u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93", "\u53E6\u4E00\u7A97\u53E3\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93");
   }
+  if (ctx.currentFailed && ctx.engine !== "current" && (status.phase === "ready" || status.phase === "active")) {
+    return line(
+      updating ? "\u65B0\u7248\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u7EE7\u7EED\u7528\u4E0A\u4E00\u7248\uFF0C\u4E0B\u6B21\u6253\u5F00\u518D\u8BD5" : "\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93\uFF0C\u4E0B\u6B21\u6253\u5F00\u518D\u8BD5",
+      "\u8BCD\u5E93\u542F\u7528\u5931\u8D25",
+      { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } }
+    );
+  }
   switch (status.phase) {
     case "active":
     case "ready":
-      if (ctx.fullLoaded) return line("\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u4E0D\u7528\u8054\u7F51", null, { normal: true });
-      return status.phase === "ready" ? line("\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u505C\u624B\u540E\u81EA\u52A8\u542F\u7528", "\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u505C\u624B\u540E\u542F\u7528") : line("\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u4E0B\u6B21\u6253\u5F00\u65F6\u542F\u7528", null);
+      if (ctx.engine === "current") return line("\u8BCD\u5E93\u5DF2\u5C31\u7EEA\uFF0C\u4E4B\u540E\u4E0D\u7528\u8054\u7F51", null, { normal: true });
+      if (status.phase === "ready") {
+        return updating ? line("\u65B0\u7248\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u505C\u624B\u540E\u81EA\u52A8\u6362\u4E0A", "\u65B0\u7248\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u505C\u624B\u540E\u6362\u4E0A") : line("\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u505C\u624B\u540E\u81EA\u52A8\u542F\u7528", "\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u505C\u624B\u540E\u542F\u7528");
+      }
+      return line("\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\uFF0C\u4E0B\u6B21\u6253\u5F00\u65F6\u542F\u7528", null);
     case "downloading":
-      return line(`\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93 ${size}\uFF0C\u4E0B\u5B8C\u524D\u5019\u9009\u8BCD\u4F1A\u5C11\u4E00\u4E9B\uFF0C\u7167\u5E38\u6253\u5B57`, `\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93 ${size}`, { action: { kind: "pause", label: "\u6682\u505C" } });
+      return updating ? line(`\u6B63\u5728\u66F4\u65B0\u8BCD\u5E93 ${size}\uFF0C\u66F4\u65B0\u671F\u95F4\u7167\u5E38\u7528\u4E0A\u4E00\u7248`, `\u6B63\u5728\u66F4\u65B0\u8BCD\u5E93 ${size}`, { action: { kind: "pause", label: "\u6682\u505C" } }) : line(`\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93 ${size}\uFF0C\u4E0B\u5B8C\u524D\u5019\u9009\u8BCD\u4F1A\u5C11\u4E00\u4E9B\uFF0C\u7167\u5E38\u6253\u5B57`, `\u6B63\u5728\u4E0B\u8F7D\u8BCD\u5E93 ${size}`, { action: { kind: "pause", label: "\u6682\u505C" } });
     case "verifying":
-      return line("\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u6B63\u5728\u6821\u9A8C", "\u8BCD\u5E93\u6821\u9A8C\u4E2D");
+      return line(updating ? "\u65B0\u7248\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u6B63\u5728\u6821\u9A8C" : "\u8BCD\u5E93\u4E0B\u8F7D\u597D\u4E86\uFF0C\u6B63\u5728\u6821\u9A8C", "\u8BCD\u5E93\u6821\u9A8C\u4E2D");
     case "waiting": {
-      if (status.error?.kind === "offline") return line("\u7B49\u5F85\u8054\u7F51\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED\u4E0B\u8F7D\u8BCD\u5E93", "\u7B49\u5F85\u8054\u7F51\u4E0B\u8F7D\u8BCD\u5E93");
+      if (status.error?.kind === "offline") {
+        return updating ? line("\u7B49\u5F85\u8054\u7F51\u66F4\u65B0\u8BCD\u5E93\uFF0C\u7167\u5E38\u7528\u4E0A\u4E00\u7248", "\u7B49\u5F85\u8054\u7F51\u66F4\u65B0\u8BCD\u5E93") : line("\u7B49\u5F85\u8054\u7F51\uFF0C\u8054\u7F51\u540E\u81EA\u52A8\u7EE7\u7EED\u4E0B\u8F7D\u8BCD\u5E93", "\u7B49\u5F85\u8054\u7F51\u4E0B\u8F7D\u8BCD\u5E93");
+      }
       const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 6e4)) : 0;
+      const when = minutes > 5 ? `\u7EA6 ${minutes} \u5206\u949F\u540E\u81EA\u52A8\u91CD\u8BD5` : "\u7A0D\u540E\u81EA\u52A8\u91CD\u8BD5";
       return line(
-        minutes > 5 ? `\u8BCD\u5E93\u6682\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u7EA6 ${minutes} \u5206\u949F\u540E\u81EA\u52A8\u91CD\u8BD5` : "\u8BCD\u5E93\u6682\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u7A0D\u540E\u81EA\u52A8\u91CD\u8BD5",
+        updating ? `\u8BCD\u5E93\u66F4\u65B0\u6682\u672A\u5B8C\u6210\uFF0C${when}\uFF08\u7167\u5E38\u7528\u4E0A\u4E00\u7248\uFF09` : `\u8BCD\u5E93\u6682\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C${when}`,
         "\u8BCD\u5E93\u7A0D\u540E\u91CD\u8BD5",
         { action: { kind: "retry", label: "\u7ACB\u5373\u91CD\u8BD5" } }
       );
     }
     case "paused":
       if (status.pausedReason === "baseOnly") return line("\u5DF2\u505C\u6B62\u4F7F\u7528\u4E0B\u8F7D\u7684\u8BCD\u5E93\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93", null, { action: { kind: "restore", label: "\u6062\u590D" } });
-      return line(`\u5DF2\u6682\u505C\u4E0B\u8F7D\u8BCD\u5E93${status.segmentsDone ? `\uFF08\u5DF2\u4E0B ${mb(status.bytesDone)} MB\uFF09` : ""}`, null, { action: { kind: "resume", label: "\u7EE7\u7EED" } });
+      return line(
+        `\u5DF2\u6682\u505C${updating ? "\u66F4\u65B0" : "\u4E0B\u8F7D"}\u8BCD\u5E93${status.segmentsDone ? `\uFF08\u5DF2\u4E0B ${mb(status.bytesDone)} MB\uFF09` : ""}${updating ? "\uFF0C\u7167\u5E38\u7528\u4E0A\u4E00\u7248" : ""}`,
+        null,
+        { action: { kind: "resume", label: "\u7EE7\u7EED" } }
+      );
     case "error":
       if (status.error?.kind === "storage") {
-        return line("\u5B58\u50A8\u7A7A\u95F4\u4E0D\u8DB3\uFF0C\u8BCD\u5E93\u6CA1\u4E0B\u8F7D\u5B8C\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93", "\u8BCD\u5E93\uFF1A\u7A7A\u95F4\u4E0D\u8DB3", { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } });
+        return line(
+          `\u5B58\u50A8\u7A7A\u95F4\u4E0D\u8DB3\uFF0C${updating ? "\u65B0\u7248\u8BCD\u5E93\u6CA1\u4E0B\u8F7D\u5B8C\uFF0C\u7167\u5E38\u7528\u4E0A\u4E00\u7248" : "\u8BCD\u5E93\u6CA1\u4E0B\u8F7D\u5B8C\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93"}`,
+          "\u8BCD\u5E93\uFF1A\u7A7A\u95F4\u4E0D\u8DB3",
+          { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } }
+        );
       }
-      return line("\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93", "\u8BCD\u5E93\u542F\u7528\u5931\u8D25", { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } });
+      return updating ? line("\u65B0\u7248\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u7EE7\u7EED\u7528\u4E0A\u4E00\u7248", "\u65B0\u7248\u8BCD\u5E93\u542F\u7528\u5931\u8D25", { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } }) : line("\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6682\u65F6\u7528\u5185\u7F6E\u8BCD\u5E93", "\u8BCD\u5E93\u542F\u7528\u5931\u8D25", { warn: true, action: { kind: "retry", label: "\u91CD\u8BD5" } });
     default:
+      if (updating) return line("\u6709\u65B0\u7248\u8BCD\u5E93\uFF0C\u7A0D\u540E\u81EA\u52A8\u66F4\u65B0", null, { action: { kind: "download", label: "\u73B0\u5728\u66F4\u65B0" } });
       return line(
         status.segmentsDone ? `\u5DF2\u4E0B\u8F7D ${size}\uFF0C\u7A0D\u540E\u81EA\u52A8\u63A5\u7740\u4E0B` : `\u8FD8\u6CA1\u4E0B\u8F7D\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\uFF0C\u7A0D\u540E\u81EA\u52A8\u5F00\u59CB`,
         null,
@@ -1293,7 +1362,7 @@ var DictStatusModal = class extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.empty();
     const snap = this.controls.snapshot();
-    const line = dictLine(snap?.status, snap?.ctx ?? { fullLoaded: false });
+    const line = dictLine(snap?.status, snap?.ctx ?? { engine: "base" });
     contentEl.createEl("p", { text: line.text, cls: line.warn ? "just-type-dict-warn" : "" });
     if (snap) {
       const { status } = snap;
@@ -1692,6 +1761,7 @@ var UpdateChecker = class {
     this.app = app;
     this.current = current;
     this.log = log;
+    this.firstRun = false;
     this.state = this.load();
   }
   /* ---------- 本机存储 ---------- */
@@ -1723,6 +1793,7 @@ var UpdateChecker = class {
   /** 记下本次运行的版本。返回「升级前的版本」；首次在这台设备运行、没升级或降级都返回 undefined。 */
   recordRun() {
     const previous = this.state.lastRunVersion;
+    this.firstRun = previous === void 0;
     this.state.lastRunVersion = this.current;
     if (this.state.latest && compareVersions(this.state.latest.version, this.current) <= 0) this.state.latest = void 0;
     this.save();
@@ -1734,6 +1805,10 @@ var UpdateChecker = class {
     const latest = this.state.latest;
     if (!latest || compareVersions(latest.version, this.current) <= 0) return void 0;
     return latest;
+  }
+  /** 这台设备上第一次运行本插件（从没记录过运行版本）：弹一次使用说明。 */
+  isFirstRun() {
+    return this.firstRun;
   }
   /** 上次成功拿到版本信息的时间；从没成功过是 undefined。 */
   lastCheckedAt() {
@@ -1825,7 +1900,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 00:08:15" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 11:58:31" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2098,6 +2173,11 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
   }
   getSettingDefinitions() {
     return [{
+      name: "\u4F7F\u7528\u8BF4\u660E",
+      desc: "\u600E\u4E48\u5207\u6362\u4E2D\u82F1\u6587\u3001\u9009\u8BCD\u3001\u6253\u8868\u60C5\uFF0C\u9047\u5230\u95EE\u9898\u5148\u770B\u8FD9\u91CC\u3002",
+      aliases: ["help", "guide", "how to use", "\u5E2E\u52A9", "\u8BF4\u660E", "\u7528\u6CD5", "\u600E\u4E48\u7528"],
+      action: () => this.plugin.openHelp()
+    }, {
       name: "\u4E2D\u82F1\u6587\u5207\u6362\u952E",
       desc: "\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002",
       aliases: ["toggle", "Shift", "chinese", "english"],
@@ -2132,6 +2212,7 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
     const { containerEl } = this;
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     containerEl.empty();
+    new import_obsidian3.Setting(containerEl).setName("\u4F7F\u7528\u8BF4\u660E").setDesc("\u600E\u4E48\u5207\u6362\u4E2D\u82F1\u6587\u3001\u9009\u8BCD\u3001\u6253\u8868\u60C5\uFF0C\u9047\u5230\u95EE\u9898\u5148\u770B\u8FD9\u91CC\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openHelp()));
     new import_obsidian3.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
         dropdown.addOption(value, label);
@@ -2175,6 +2256,48 @@ var WhatsNewModal = class extends import_obsidian3.Modal {
     }
     const actions = this.contentEl.createDiv({ cls: "just-type-diag-actions" });
     actions.createEl("button", { text: "\u77E5\u9053\u4E86", cls: "mod-cta" }).addEventListener("click", () => this.close());
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var HelpModal = class extends import_obsidian3.Modal {
+  constructor(app, welcome, toggleKey, dictSize) {
+    super(app);
+    this.welcome = welcome;
+    this.toggleKey = toggleKey;
+    this.dictSize = dictSize;
+  }
+  onOpen() {
+    this.setTitle(this.welcome ? "\u6B22\u8FCE\u4F7F\u7528 Just Type \xB7 \u5C31\u6253\u4E2A\u5B57" : "Just Type \xB7 \u4F7F\u7528\u8BF4\u660E");
+    const el = this.contentEl;
+    el.addClass("just-type-help");
+    const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
+    const steps = [
+      ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D", "Just Type \u63A5\u624B\uFF0C\u76F4\u63A5\u6253\u62FC\u97F3\u5C31\u662F\u4E2D\u6587\u3002"],
+      key ? [`\u5355\u72EC\u6309\u4E00\u4E0B ${key}\uFF0C\u5207\u6362\u4E2D\u82F1\u6587`, "\u4E0D\u7528\u6765\u56DE\u5207\u7CFB\u7EDF\u952E\u76D8\uFF1B\u5207\u6362\u952E\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6539\u3002"] : ["\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u6362\u4E2D\u82F1\u6587", "\u4E5F\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6307\u5B9A\u4E00\u4E2A\u5207\u6362\u952E\u3002"],
+      ["\u9009\u8BCD", "\u7A7A\u683C\u9009\u7B2C\u4E00\u4E2A\uFF0C\u6570\u5B57\u952E\u9009\u7B2C\u51E0\u4E2A\uFF0C\u4E5F\u53EF\u4EE5\u7528\u624B\u6307\u70B9\u3002"],
+      ["\u8868\u60C5", "\u4ECD\u7528\u952E\u76D8\u4E0A\u7684 \u{1F310} \u5730\u7403\u952E\u8C03\u51FA\u3002"]
+    ];
+    const list = el.createEl("ol", { cls: "just-type-help-steps" });
+    for (const [title, desc] of steps) {
+      const item = list.createEl("li");
+      item.createDiv({ cls: "just-type-help-title", text: title });
+      item.createDiv({ cls: "just-type-help-desc", text: desc });
+    }
+    const notes = el.createEl("ul", { cls: "just-type-help-notes" });
+    notes.createEl("li", { text: "\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u62FC\u97F3\u65F6\uFF0CJust Type \u4F1A\u8BA9\u51FA\u6309\u952E\u5E76\u5F39\u51FA\u63D0\u793A\uFF1B\u5207\u56DE\u82F1\u6587 ABC \u5C31\u6062\u590D\u3002" });
+    notes.createEl("li", { text: `\u7B2C\u4E00\u6B21\u4F7F\u7528\u4F1A\u5728\u540E\u53F0\u4E0B\u8F7D\u8BCD\u5E93\uFF08${this.dictSize}\uFF09\uFF0C\u4E0B\u8F7D\u65F6\u7167\u5E38\u6253\u5B57\u3002` });
+    el.createDiv({ cls: "just-type-help-heading", text: "\u9047\u5230\u95EE\u9898" });
+    const faq = el.createEl("ul", { cls: "just-type-help-notes" });
+    faq.createEl("li", { text: "\u6253\u5B57\u6CA1\u53CD\u5E94\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u662F\u300C\u82F1\u6587 ABC\u300D\uFF0C\u5149\u6807\u5728\u7B14\u8BB0\u6B63\u6587\u6216\u6807\u9898\u91CC\u3002" });
+    faq.createEl("li", { text: key ? `\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u56DE\u4E2D\u6587\u3002` : "\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u56DE\u4E2D\u6587\u3002" });
+    const last = faq.createEl("li", { text: "\u8FD8\u662F\u4E0D\u884C\uFF1A\u5728\u547D\u4EE4\u9762\u677F\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\uFF0C\u628A\u62A5\u544A\u53D1\u5230 " });
+    last.createEl("a", { text: "GitHub \u53CD\u9988\u9875", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
+    last.append("\u3002");
+    if (this.welcome) el.createEl("p", { cls: "just-type-help-footer", text: "\u4EE5\u540E\u53EF\u4EE5\u5728 \u8BBE\u7F6E \u2192 Just Type IME \u2192 \u4F7F\u7528\u8BF4\u660E \u518D\u770B\u3002" });
+    const actions = el.createDiv({ cls: "just-type-diag-actions" });
+    actions.createEl("button", { text: this.welcome ? "\u5F00\u59CB\u6253\u5B57" : "\u77E5\u9053\u4E86", cls: "mod-cta" }).addEventListener("click", () => this.close());
   }
   onClose() {
     this.contentEl.empty();
@@ -2235,10 +2358,10 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.panelPressAt = -Infinity;
     this.dictListeners = /* @__PURE__ */ new Set();
     this.dictNoticed = /* @__PURE__ */ new Set();
-    /* 引擎实际在用的词库，和下载任务的状态分开记。 */
-    this.engineDict = "base";
-    /* 这次打开里完整词库启用失败过：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
-    this.activationFailedThisRun = false;
+    /* 引擎实际在用的词库：完整词库的版本 id，null＝内置词库。和下载任务的状态分开记。 */
+    this.engineId = null;
+    /* 这次打开里启用失败过的词库版本：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
+    this.failedThisRun = /* @__PURE__ */ new Set();
     this.lastCaptureAt = -Infinity;
     this.inputSequence = 0;
     this.discardThrough = 0;
@@ -2296,13 +2419,13 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.updateStatus("\u6B63\u5728\u52A0\u8F7D\u2026");
     try {
       await this.openDict();
-      let client = this.dict?.canActivate() ? await this.startFullEngine() : void 0;
+      let client = await this.startBestFullEngine();
       if (!client) {
         const t0assets = Date.now();
         const assets = await loadLocalAssets();
         this.log(`\u5185\u5D4C\u8D44\u6E90\u89E3\u538B\u5B8C\u6210\uFF08${Date.now() - t0assets}ms\uFF09`);
         client = await this.startEngine(assets, "\u57FA\u7840\u8BCD\u5E93");
-        this.engineDict = "base";
+        this.engineId = null;
         this.loadedDict = embeddedDictIdentity();
       }
       this.client = client;
@@ -2312,6 +2435,13 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
       else new import_obsidian3.Notice(this.readyHint());
       this.startDictTasks();
+      if (this.updates?.isFirstRun()) {
+        try {
+          this.openHelp(true);
+        } catch (error) {
+          this.log(`\u4F7F\u7528\u8BF4\u660E\u6253\u4E0D\u5F00\uFF1A${this.errorMessage(error)}`);
+        }
+      }
     } catch (error) {
       const message = this.errorMessage(error);
       this.initError = message;
@@ -2377,36 +2507,56 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     const status = dict.status();
     this.log(`\u5B8C\u6574\u8BCD\u5E93\u72B6\u6001\uFF1A${status.phase}\uFF0C\u5DF2\u6709 ${status.segmentsDone}/${status.segmentsTotal} \u6BB5${USING_DEV_URLS ? "\uFF08\u6D4B\u8BD5\u4E0B\u8F7D\u5730\u5740\uFF09" : ""}`);
   }
-  /** 启动时用已装好的完整词库起引擎。取不出、校验不过或起不来都返回 undefined，由调用方改用基础词库。 */
-  async startFullEngine() {
+  /** 启动时：先试新版完整词库，不行再试本机的上一版；都不行返回 undefined，由调用方用内置词库。 */
+  async startBestFullEngine() {
     const dict = this.dict;
+    if (!dict) return void 0;
+    if (dict.canActivate()) {
+      const client = await this.startFullEngine(dict.catalog);
+      if (client) return client;
+    }
+    const previous = dict.fallbackCatalog();
+    return previous && !this.failedThisRun.has(previous.id) ? await this.startFullEngine(previous) : void 0;
+  }
+  dictName(catalog) {
+    if (!catalog) return "\u57FA\u7840\u8BCD\u5E93";
+    return catalog.id === this.dict?.catalog.id ? "\u5B8C\u6574\u8BCD\u5E93" : `\u4E0A\u4E00\u7248\u8BCD\u5E93 ${catalog.id}`;
+  }
+  /** 用已装好的某个版本的完整词库起引擎。取不出、校验不过或起不来都返回 undefined。 */
+  async startFullEngine(catalog) {
+    const dict = this.dict;
+    const name = this.dictName(catalog);
     const t0 = Date.now();
     try {
-      const files = await dict.extractInstalled();
+      const files = await dict.extractInstalled(catalog);
       if (!files) {
-        this.dictLog("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7\uFF0C\u8FD9\u6B21\u7528\u57FA\u7840\u8BCD\u5E93\uFF0C\u7A0D\u540E\u81EA\u52A8\u8865\u4E0B");
+        this.dictLog(`${name}\u6821\u9A8C\u672A\u901A\u8FC7\uFF0C\u8FD9\u6B21\u4E0D\u7528\u5B83`);
         return void 0;
       }
-      this.dictLog(`\u5B8C\u6574\u8BCD\u5E93\u53D6\u51FA\u5E76\u6821\u9A8C\u5B8C\u6210\uFF08${Date.now() - t0}ms\uFF09`);
+      this.dictLog(`${name}\u53D6\u51FA\u5E76\u6821\u9A8C\u5B8C\u6210\uFF08${Date.now() - t0}ms\uFF09`);
       const assets = await this.fullAssets(files);
-      await dict.beginActivation();
+      await dict.beginActivation(catalog.id);
       try {
-        const client = await this.startEngine(assets, "\u5B8C\u6574\u8BCD\u5E93", true);
-        await dict.endActivation(true);
-        this.engineDict = "full";
-        this.loadedDict = fullDictIdentity(dict.catalog);
-        this.dictLog(`\u542F\u52A8\u5373\u7528\u5B8C\u6574\u8BCD\u5E93\uFF08\u53D6\u51FA\u6821\u9A8C\uFF0B\u52A0\u8F7D\u5171 ${Date.now() - t0}ms\uFF09`);
-        this.noticeOnce("activated", "\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\u597D\uFF0C\u4E4B\u540E\u4E0D\u7528\u8054\u7F51");
+        const client = await this.startEngine(assets, name, true);
+        await dict.endActivation(true, "", catalog.id);
+        this.engineId = catalog.id;
+        this.loadedDict = fullDictIdentity(catalog);
+        this.dictLog(`\u542F\u52A8\u5373\u7528${name}\uFF08\u53D6\u51FA\u6821\u9A8C\uFF0B\u52A0\u8F7D\u5171 ${Date.now() - t0}ms\uFF09`);
+        if (catalog.id === dict.catalog.id) this.announceActivated();
         return client;
       } catch (error) {
-        this.activationFailedThisRun = true;
-        await dict.endActivation(false, this.errorMessage(error));
+        this.failedThisRun.add(catalog.id);
+        await dict.endActivation(false, this.errorMessage(error), catalog.id);
         throw error;
       }
     } catch (error) {
-      this.dictLog(`\u5B8C\u6574\u8BCD\u5E93\u542F\u7528\u5931\u8D25\uFF0C\u6539\u7528\u57FA\u7840\u8BCD\u5E93\uFF1A${this.errorMessage(error)}`);
+      this.dictLog(`${name}\u542F\u7528\u5931\u8D25\uFF1A${this.errorMessage(error)}`);
       return void 0;
     }
+  }
+  /** 新版完整词库第一次启用成功：只提示一次。原来用着上一版的，说「已更新」。 */
+  announceActivated() {
+    this.noticeOnce("activated", this.dict?.hadPrevious() ? "\u8BCD\u5E93\u5DF2\u66F4\u65B0\u5230\u65B0\u7248" : "\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\u597D\uFF0C\u4E4B\u540E\u4E0D\u7528\u8054\u7F51");
   }
   /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
   startDictTasks() {
@@ -2428,7 +2578,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   onDictStatus(status) {
     this.refreshDict();
     if (status.phase === "downloading" && !status.resuming) {
-      this.noticeOnce("download-started", `\u6B63\u5728\u540E\u53F0\u4E0B\u8F7D\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\uFF0C\u4E0B\u8F7D\u671F\u95F4\u7167\u5E38\u6253\u5B57\u3002`);
+      this.noticeOnce("download-started", this.kindOf(this.engineId) === "previous" ? `\u6B63\u5728\u540E\u53F0\u66F4\u65B0\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\uFF0C\u66F4\u65B0\u671F\u95F4\u7167\u5E38\u7528\u4E0A\u4E00\u7248\u3002` : `\u6B63\u5728\u540E\u53F0\u4E0B\u8F7D\u8BCD\u5E93\uFF08${approxSize(status.catalog)}\uFF09\uFF0C\u4E0B\u8F7D\u671F\u95F4\u7167\u5E38\u6253\u5B57\u3002`);
     }
     if (status.phase === "error" && status.error) {
       this.noticeOnce(`error-${status.error.kind}`, `Just Type\uFF1A${dictLine(status, this.dictContext()).text}\u3002\u53EF\u5728\u8BBE\u7F6E\u91CC\u91CD\u8BD5\u3002`, 12e3);
@@ -2449,8 +2599,12 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       if (first) new import_obsidian3.Notice(text, duration);
     });
   }
+  kindOf(id) {
+    if (id === null) return "base";
+    return id === this.dict?.catalog.id ? "current" : "previous";
+  }
   dictContext() {
-    return { fullLoaded: this.engineDict === "full", switching: this.switching };
+    return { engine: this.kindOf(this.engineId), switching: this.switching, currentFailed: this.dict ? this.failedThisRun.has(this.dict.catalog.id) : false };
   }
   /** 状态条和打开着的详情窗跟着刷新，一帧最多一次。 */
   refreshDict() {
@@ -2464,9 +2618,16 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       for (const listener of this.dictListeners) listener();
     });
   }
-  /** 该用哪个词库：已下载齐、没被停用、没选只用基础词库，且这次打开里没启用失败过，就用完整词库。 */
-  wantedDict() {
-    return this.dict?.canActivate() && !this.activationFailedThisRun ? "full" : "base";
+  /**
+   * 该用哪个词库：新版已下载齐、没被停用、没选只用基础词库，就用新版；否则用本机已有的上一版；
+   * 都没有就用内置词库。这次打开里启用失败过的版本不再用。
+   */
+  wantedCatalog() {
+    const dict = this.dict;
+    if (!dict) return null;
+    if (dict.canActivate() && !this.failedThisRun.has(dict.catalog.id)) return dict.catalog;
+    const previous = dict.fallbackCatalog();
+    return previous && !this.failedThisRun.has(previous.id) ? previous : null;
   }
   /** 用户停手：没有正在打的拼音或表情，2 秒内没按过键，窗口在前台。 */
   inputIdle() {
@@ -2475,12 +2636,12 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   /** 实际在用的和该用的不一致时，等用户停手再换。一直在打字就一直等，停下来就换。 */
   syncEngine() {
     if (!this.ready || this.switching || this.switchTimer !== void 0) return;
-    if (this.wantedDict() === this.engineDict) return;
+    if ((this.wantedCatalog()?.id ?? null) === this.engineId) return;
     const check = () => {
       this.switchTimer = void 0;
       if (!this.ready || this.switching) return;
-      const want = this.wantedDict();
-      if (want === this.engineDict) return;
+      const want = this.wantedCatalog();
+      if ((want?.id ?? null) === this.engineId) return;
       if (!this.inputIdle()) {
         this.switchTimer = window.setTimeout(check, 1e3);
         return;
@@ -2492,20 +2653,22 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   /**
    * 换引擎。先在旧引擎照常服务时把新词库准备好（取出、校验、备份学习记录），
    * 再用很短的时间停旧起新；这期间的按键排队，新引擎就绪后按原顺序处理。
-   * 新引擎起不来就退回基础词库。两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
+   * 新引擎起不来就退回本机的上一版完整词库，再不行用基础词库。
+   * 两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
    */
   async switchEngine(target) {
     const dict = this.dict;
-    if (this.switching || !this.client || target === "full" && !dict) return;
-    const label = target === "full" ? "\u5B8C\u6574\u8BCD\u5E93" : "\u57FA\u7840\u8BCD\u5E93";
-    this.switching = target;
+    if (this.switching || !this.client || target && !dict) return;
+    const label = this.dictName(target);
+    const kind = this.kindOf(target?.id ?? null);
+    this.switching = kind;
     this.refreshDict();
     const t0 = Date.now();
     let assets;
     try {
-      if (target === "full") {
-        const files = await dict.extractInstalled();
-        if (!files) throw new Error("\u5B8C\u6574\u8BCD\u5E93\u6821\u9A8C\u672A\u901A\u8FC7");
+      if (target) {
+        const files = await dict.extractInstalled(target);
+        if (!files) throw new Error(`${label}\u6821\u9A8C\u672A\u901A\u8FC7`);
         assets = await this.fullAssets(files);
         await this.backupUserDict();
       } else {
@@ -2529,23 +2692,23 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     old.destroy();
     this.client = void 0;
     try {
-      if (target === "full") await dict.beginActivation();
-      this.client = await this.startEngine(assets, label, target === "full");
-      this.engineDict = target;
-      this.loadedDict = target === "full" ? fullDictIdentity(dict.catalog) : embeddedDictIdentity();
-      if (target === "full") {
-        await dict.endActivation(true);
-        this.noticeOnce("activated", "\u8BCD\u5E93\u5DF2\u4E0B\u8F7D\u597D\uFF0C\u4E4B\u540E\u4E0D\u7528\u8054\u7F51");
+      if (target) await dict.beginActivation(target.id);
+      this.client = await this.startEngine(assets, label, Boolean(target));
+      this.engineId = target?.id ?? null;
+      this.loadedDict = target ? fullDictIdentity(target) : embeddedDictIdentity();
+      if (target) {
+        await dict.endActivation(true, "", target.id);
+        if (kind === "current") this.announceActivated();
       }
       this.dictLog(`\u5DF2\u5207\u6362\u5230${label}\uFF08\u51C6\u5907\uFF0B\u5207\u6362\u5171 ${Date.now() - t0}ms\uFF09`);
     } catch (error) {
       const message = this.errorMessage(error);
       this.dictLog(`\u5207\u6362\u5230${label}\u5931\u8D25\uFF1A${message}`);
-      if (target === "full") {
-        this.activationFailedThisRun = true;
-        await dict.endActivation(false, message);
+      if (target) {
+        this.failedThisRun.add(target.id);
+        await dict.endActivation(false, message, target.id);
       }
-      if (!this.client) await this.recoverBaseEngine();
+      if (!this.client) await this.recoverEngine();
     } finally {
       this.switching = void 0;
       const queued = this.engineQueue ?? [];
@@ -2555,11 +2718,19 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       this.syncEngine();
     }
   }
-  /** 新引擎起不来时重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
-  async recoverBaseEngine() {
+  /** 新引擎起不来时：先退回本机的上一版完整词库，再不行重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
+  async recoverEngine() {
+    const previous = this.dict?.fallbackCatalog();
+    if (previous && !this.failedThisRun.has(previous.id)) {
+      const client = await this.startFullEngine(previous);
+      if (client) {
+        this.client = client;
+        return;
+      }
+    }
     try {
       this.client = await this.startEngine(await loadLocalAssets(), "\u57FA\u7840\u8BCD\u5E93");
-      this.engineDict = "base";
+      this.engineId = null;
       this.loadedDict = embeddedDictIdentity();
     } catch (error) {
       const message = this.errorMessage(error);
@@ -2625,7 +2796,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     if (kind === "pause") void dict.pause();
     else if (kind === "resume") void dict.resume();
     else {
-      this.activationFailedThisRun = false;
+      this.failedThisRun.clear();
       void (kind === "restore" ? dict.setBaseOnly(false) : dict.retryNow());
     }
   }
@@ -2660,7 +2831,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     const dict = this.dict;
     if (!dict) return;
     await dict.removeDownloaded();
-    this.activationFailedThisRun = false;
+    this.failedThisRun.clear();
     await dict.setBaseOnly(false);
     new import_obsidian3.Notice("\u5DF2\u5220\u9664\u672C\u673A\u7684\u8BCD\u5E93\u6570\u636E\uFF0C\u6B63\u5728\u91CD\u65B0\u4E0B\u8F7D\u3002\u5B66\u4E60\u8BB0\u5F55\u4E0D\u53D7\u5F71\u54CD\u3002", 6e3);
   }
@@ -2907,7 +3078,8 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       `  \u9636\u6BB5 ${s.phase}\uFF5C\u5DF2\u6838\u5BF9 ${s.segmentsDone}/${s.segmentsTotal} \u6BB5\uFF08${s.bytesDone}/${s.bytesTotal} B\uFF09\uFF5C\u63A5\u7740\u4E0B ${s.resuming}`,
       `  \u6682\u505C\u610F\u56FE ${s.pausedReason ?? "\u65E0"}\uFF5C\u4E0B\u6B21\u81EA\u52A8\u91CD\u8BD5 ${time(s.nextRetryAt)}`,
       `  \u6700\u8FD1\u9519\u8BEF ${s.error ? `${s.error.kind}\uFF1A${s.error.message}` : "\u65E0"}`,
-      `  \u5F15\u64CE\u5728\u7528 ${this.engineDict}\uFF5C\u5207\u6362\u4E2D ${this.switching ?? "\u5426"}\uFF5C\u8FD9\u6B21\u542F\u7528\u5931\u8D25\u8FC7 ${this.activationFailedThisRun}\uFF5C\u8BB0\u5F55\u7684\u542F\u7528\u7248\u672C ${s.activeId ?? "\u65E0"}\uFF5C\u53E6\u4E00\u7A97\u53E3\u5728\u4E0B ${s.elsewhere}`,
+      `  \u5F15\u64CE\u5728\u7528 ${this.engineId ?? "\u5185\u7F6E\u8BCD\u5E93"}\uFF5C\u5207\u6362\u4E2D ${this.switching ?? "\u5426"}\uFF5C\u8FD9\u6B21\u542F\u7528\u5931\u8D25\u8FC7 ${[...this.failedThisRun].join("\u3001") || "\u65E0"}\uFF5C\u8BB0\u5F55\u7684\u542F\u7528\u7248\u672C ${s.activeId ?? "\u65E0"}\uFF5C\u53E6\u4E00\u7A97\u53E3\u5728\u4E0B ${s.elsewhere}`,
+      `  \u63D2\u4EF6\u8BA4\u5F97\u7684\u4E0A\u4E00\u7248 ${dict.previous.map((c) => c.id).join("\u3001") || "\u65E0"}\uFF5C\u672C\u673A\u53EF\u7528\u7684\u4E0A\u4E00\u7248 ${dict.fallbackCatalog()?.id ?? "\u65E0"}`,
       `  \u8BBE\u5907\u5728\u7EBF navigator.onLine = ${String(navigator.onLine)}`,
       `  \u6700\u8FD1\u4E0B\u8F7D\u4E8B\u4EF6\uFF08\u8DE8\u91CD\u542F\u4FDD\u7559\uFF0C\u6700\u591A 60 \u6761\uFF09\uFF1A`,
       ...s.history.length ? s.history.map((line) => `    ${line}`) : ["    \uFF08\u65E0\uFF09"]
@@ -2949,6 +3121,9 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       box.addEventListener("click", () => new WhatsNewModal(this.app, notes, `Just Type ${PLUGIN_VERSION} \u66F4\u65B0\u4E86\u4EC0\u4E48`).open());
     });
     new import_obsidian3.Notice(message, 12e3);
+  }
+  openHelp(welcome = false) {
+    new HelpModal(this.app, welcome, this.settings.toggleKey, approxSize(CATALOG)).open();
   }
   openWhatsNew() {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
@@ -3038,6 +3213,11 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       id: "dictionary-redownload",
       name: "\u91CD\u65B0\u4E0B\u8F7D\u8BCD\u5E93\uFF08\u6392\u67E5\u95EE\u9898\u7528\uFF09(redownload dictionary)",
       callback: () => void this.redownloadDict()
+    });
+    this.addCommand({
+      id: "help",
+      name: "\u4F7F\u7528\u8BF4\u660E (help)",
+      callback: () => this.openHelp()
     });
     this.addCommand({
       id: "whats-new",
