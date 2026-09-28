@@ -522,7 +522,7 @@ class WhatsNewModal extends Modal {
  * 内容就是上手最少要知道的几件事，加上遇到问题先看什么。切换键跟着设置变。
  */
 class HelpModal extends Modal {
-  constructor(app: App, private welcome: boolean, private toggleKey: ToggleKey, private dictSize: string) {
+  constructor(app: App, private welcome: boolean, private toggleKey: ToggleKey) {
     super(app);
   }
 
@@ -531,10 +531,12 @@ class HelpModal extends Modal {
     const el = this.contentEl;
     el.addClass("just-type-help");
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
+    // 最要紧的是前两条：系统键盘在英文 ABC 时 Just Type 才工作，切到中文拼音它就让出按键。
     const steps: [string, string][] = [
-      ["系统键盘切到「英文 ABC」", "Just Type 接手，直接打拼音就是中文。"],
+      ["系统键盘切到「英文 ABC」，Just Type 接手", "可以输入拼音中文或英文。"],
+      ["系统键盘切到「中文拼音」，Just Type 退出", "按键归还系统输入法。接手和退出时，Just Type 都会弹出提示。"],
       key
-        ? [`单独按一下 ${key}，切换中英文`, "不用来回切系统键盘；切换键可以在设置里改。"]
+        ? [`单独按一下 ${key}，切换中英文`, "在 Just Type 内部切换，不用来回切系统键盘；切换键可以在设置里改。"]
         : ["用命令「切换中英文 (toggle)」切换中英文", "也可以在设置里指定一个切换键。"],
       ["选词", "空格选第一个，数字键选第几个，也可以用手指点。"],
       ["表情", "仍用键盘上的 🌐 地球键调出。"]
@@ -545,13 +547,12 @@ class HelpModal extends Modal {
       item.createDiv({ cls: "just-type-help-title", text: title });
       item.createDiv({ cls: "just-type-help-desc", text: desc });
     }
-    const notes = el.createEl("ul", { cls: "just-type-help-notes" });
-    notes.createEl("li", { text: "系统键盘切到中文拼音时，Just Type 会让出按键并弹出提示；切回英文 ABC 就恢复。" });
-    notes.createEl("li", { text: `第一次使用会在后台下载词库（${this.dictSize}），下载时照常打字。` });
 
     el.createDiv({ cls: "just-type-help-heading", text: "遇到问题" });
     const faq = el.createEl("ul", { cls: "just-type-help-notes" });
-    faq.createEl("li", { text: "打字没反应：确认系统键盘是「英文 ABC」，光标在笔记正文或标题里。" });
+    faq.createEl("li", { text: key
+      ? `打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 ${key} 切到中文。`
+      : "打中文还是卡：确认系统键盘切到了「英文 ABC」，再用命令「切换中英文 (toggle)」切到中文。" });
     faq.createEl("li", { text: key ? `打出来是英文：单独按一下 ${key} 切回中文。` : "打出来是英文：用命令「切换中英文 (toggle)」切回中文。" });
     const last = faq.createEl("li", { text: "还是不行：在命令面板运行「诊断报告 (report)」，把报告发到 " });
     last.createEl("a", { text: "GitHub 反馈页", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
@@ -1282,7 +1283,7 @@ export default class JustTypePlugin extends Plugin {
     this.imeTookOver = true;
     if (Date.now() - this.lastImeWarnAt < IME_WARN_COOLDOWN_MS) return;
     this.lastImeWarnAt = Date.now();
-    new Notice("系统键盘切到中文了，Just Type 已停止工作——按键现在归系统输入法。要继续用 Just Type，请把系统键盘切回英文 ABC。", 8000);
+    new Notice("系统键盘切到中文了，Just Type 已停止工作。如要继续用 Just Type，请把系统键盘切回英文 ABC。", 8000);
   }
 
   private describeEvent(event: Event): string {
@@ -1507,7 +1508,7 @@ export default class JustTypePlugin extends Plugin {
   }
 
   openHelp(welcome = false): void {
-    new HelpModal(this.app, welcome, this.settings.toggleKey, approxSize(CATALOG)).open();
+    new HelpModal(this.app, welcome, this.settings.toggleKey).open();
   }
 
   openWhatsNew(): void {

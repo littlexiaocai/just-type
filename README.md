@@ -30,21 +30,20 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 **适用于 iPad ＋ 外接键盘**，这是它要解决的场景，也是实机验证过的场景。装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
 
-1. **系统键盘切到英文 ABC，Just Type 接手**：直接打拼音就是中文。
-2. **单独按一下 Shift，切换中英文**：不用来回切系统键盘。切换键可以在插件设置里改成 Control / Option / Command。
-3. **选词**：空格选第一个，数字键选第几个，也可以用手指点。
-4. **表情**：仍用键盘上的 🌐 地球键调出。能否调出取决于键盘列表里是否启用了「表情符号」，以及 设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号。
+1. **系统键盘切到英文 ABC，Just Type 接手**：可以输入拼音中文或英文。
+2. **系统键盘切到中文拼音，Just Type 退出**：按键归还系统输入法。
+3. **单独按一下 Shift，切换中英文**：在 Just Type 内部切换，不用来回切系统键盘。切换键可以在插件设置里改成 Control / Option / Command。
+4. **选词**：空格选第一个，数字键选第几个，也可以用手指点。
+5. **表情**：仍用键盘上的 🌐 地球键调出。能否调出取决于键盘列表里是否启用了「表情符号」，以及 设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号。
 
-系统键盘切到中文拼音时，Just Type 会让出按键，按键归系统输入法。接手和退出时都会弹出提示：
+接手和退出时，Just Type 都会弹出提示：
 
 - 接手时：「Just Type 已就绪——按 Shift 在中英文之间切换」
-- 退出时：「系统键盘切到中文了，Just Type 已停止工作——按键现在归系统输入法」
-
-第一次使用会在后台下载词库（约 26 MB），下载时照常打字，之后不用联网。
+- 退出时：「系统键盘切到中文了，Just Type 已停止工作。如要继续用 Just Type，请把系统键盘切回英文 ABC。」
 
 **遇到问题**
 
-- 打字没反应：确认系统键盘是「英文 ABC」，光标在笔记正文或标题里
+- 打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 Shift 切到中文
 - 打出来是英文：单独按一下 Shift 切回中文
 - 还是不行：在命令面板运行「诊断报告 (report)」，把报告发到 [GitHub Issues](https://github.com/littlexiaocai/just-type/issues)
 
@@ -52,12 +51,13 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 **iPad + hardware keyboard** is the setup this plugin is made for and tested on. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
 
-1. Switch the system keyboard to **English ABC**. Just Type takes over; type Pinyin to get Chinese.
-2. Tap **Shift** on its own to switch Chinese and English. You can change the key to Control / Option / Command in plugin settings.
-3. **Pick a candidate** with Space (the first one), a number key, or a tap.
-4. **Emoji** still uses the 🌐 globe key. It depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
+1. Switch the system keyboard to **English ABC** and Just Type takes over: type Pinyin Chinese or English.
+2. Switch the system keyboard to **Chinese Pinyin** and Just Type steps aside: keys go back to the system IME.
+3. Tap **Shift** on its own to switch Chinese and English inside Just Type, without touching the system keyboard. You can change the key to Control / Option / Command in plugin settings.
+4. **Pick a candidate** with Space (the first one), a number key, or a tap.
+5. **Emoji** still uses the 🌐 globe key. It depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
 
-When the system keyboard is switched to Chinese Pinyin, Just Type steps aside and tells you so. The first launch downloads the dictionary (about 26 MB) in the background while you keep typing; after that it works offline.
+Just Type shows a notice both when it takes over and when it steps aside.
 
 ## 为什么做这个项目 · Why
 

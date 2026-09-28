@@ -1900,7 +1900,7 @@ var RELEASE_NOTES = [
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 11:58:31" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 16:05:02" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2262,11 +2262,10 @@ var WhatsNewModal = class extends import_obsidian3.Modal {
   }
 };
 var HelpModal = class extends import_obsidian3.Modal {
-  constructor(app, welcome, toggleKey, dictSize) {
+  constructor(app, welcome, toggleKey) {
     super(app);
     this.welcome = welcome;
     this.toggleKey = toggleKey;
-    this.dictSize = dictSize;
   }
   onOpen() {
     this.setTitle(this.welcome ? "\u6B22\u8FCE\u4F7F\u7528 Just Type \xB7 \u5C31\u6253\u4E2A\u5B57" : "Just Type \xB7 \u4F7F\u7528\u8BF4\u660E");
@@ -2274,8 +2273,9 @@ var HelpModal = class extends import_obsidian3.Modal {
     el.addClass("just-type-help");
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     const steps = [
-      ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D", "Just Type \u63A5\u624B\uFF0C\u76F4\u63A5\u6253\u62FC\u97F3\u5C31\u662F\u4E2D\u6587\u3002"],
-      key ? [`\u5355\u72EC\u6309\u4E00\u4E0B ${key}\uFF0C\u5207\u6362\u4E2D\u82F1\u6587`, "\u4E0D\u7528\u6765\u56DE\u5207\u7CFB\u7EDF\u952E\u76D8\uFF1B\u5207\u6362\u952E\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6539\u3002"] : ["\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u6362\u4E2D\u82F1\u6587", "\u4E5F\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6307\u5B9A\u4E00\u4E2A\u5207\u6362\u952E\u3002"],
+      ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D\uFF0CJust Type \u63A5\u624B", "\u53EF\u4EE5\u8F93\u5165\u62FC\u97F3\u4E2D\u6587\u6216\u82F1\u6587\u3002"],
+      ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u4E2D\u6587\u62FC\u97F3\u300D\uFF0CJust Type \u9000\u51FA", "\u6309\u952E\u5F52\u8FD8\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u63A5\u624B\u548C\u9000\u51FA\u65F6\uFF0CJust Type \u90FD\u4F1A\u5F39\u51FA\u63D0\u793A\u3002"],
+      key ? [`\u5355\u72EC\u6309\u4E00\u4E0B ${key}\uFF0C\u5207\u6362\u4E2D\u82F1\u6587`, "\u5728 Just Type \u5185\u90E8\u5207\u6362\uFF0C\u4E0D\u7528\u6765\u56DE\u5207\u7CFB\u7EDF\u952E\u76D8\uFF1B\u5207\u6362\u952E\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6539\u3002"] : ["\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u6362\u4E2D\u82F1\u6587", "\u4E5F\u53EF\u4EE5\u5728\u8BBE\u7F6E\u91CC\u6307\u5B9A\u4E00\u4E2A\u5207\u6362\u952E\u3002"],
       ["\u9009\u8BCD", "\u7A7A\u683C\u9009\u7B2C\u4E00\u4E2A\uFF0C\u6570\u5B57\u952E\u9009\u7B2C\u51E0\u4E2A\uFF0C\u4E5F\u53EF\u4EE5\u7528\u624B\u6307\u70B9\u3002"],
       ["\u8868\u60C5", "\u4ECD\u7528\u952E\u76D8\u4E0A\u7684 \u{1F310} \u5730\u7403\u952E\u8C03\u51FA\u3002"]
     ];
@@ -2285,12 +2285,9 @@ var HelpModal = class extends import_obsidian3.Modal {
       item.createDiv({ cls: "just-type-help-title", text: title });
       item.createDiv({ cls: "just-type-help-desc", text: desc });
     }
-    const notes = el.createEl("ul", { cls: "just-type-help-notes" });
-    notes.createEl("li", { text: "\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u62FC\u97F3\u65F6\uFF0CJust Type \u4F1A\u8BA9\u51FA\u6309\u952E\u5E76\u5F39\u51FA\u63D0\u793A\uFF1B\u5207\u56DE\u82F1\u6587 ABC \u5C31\u6062\u590D\u3002" });
-    notes.createEl("li", { text: `\u7B2C\u4E00\u6B21\u4F7F\u7528\u4F1A\u5728\u540E\u53F0\u4E0B\u8F7D\u8BCD\u5E93\uFF08${this.dictSize}\uFF09\uFF0C\u4E0B\u8F7D\u65F6\u7167\u5E38\u6253\u5B57\u3002` });
     el.createDiv({ cls: "just-type-help-heading", text: "\u9047\u5230\u95EE\u9898" });
     const faq = el.createEl("ul", { cls: "just-type-help-notes" });
-    faq.createEl("li", { text: "\u6253\u5B57\u6CA1\u53CD\u5E94\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u662F\u300C\u82F1\u6587 ABC\u300D\uFF0C\u5149\u6807\u5728\u7B14\u8BB0\u6B63\u6587\u6216\u6807\u9898\u91CC\u3002" });
+    faq.createEl("li", { text: key ? `\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u5230\u4E2D\u6587\u3002` : "\u6253\u4E2D\u6587\u8FD8\u662F\u5361\uFF1A\u786E\u8BA4\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E86\u300C\u82F1\u6587 ABC\u300D\uFF0C\u518D\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u5230\u4E2D\u6587\u3002" });
     faq.createEl("li", { text: key ? `\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u5355\u72EC\u6309\u4E00\u4E0B ${key} \u5207\u56DE\u4E2D\u6587\u3002` : "\u6253\u51FA\u6765\u662F\u82F1\u6587\uFF1A\u7528\u547D\u4EE4\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u5207\u56DE\u4E2D\u6587\u3002" });
     const last = faq.createEl("li", { text: "\u8FD8\u662F\u4E0D\u884C\uFF1A\u5728\u547D\u4EE4\u9762\u677F\u8FD0\u884C\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\uFF0C\u628A\u62A5\u544A\u53D1\u5230 " });
     last.createEl("a", { text: "GitHub \u53CD\u9988\u9875", attr: { href: "https://github.com/littlexiaocai/just-type/issues" } });
@@ -2938,7 +2935,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.imeTookOver = true;
     if (Date.now() - this.lastImeWarnAt < IME_WARN_COOLDOWN_MS) return;
     this.lastImeWarnAt = Date.now();
-    new import_obsidian3.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u2014\u2014\u6309\u952E\u73B0\u5728\u5F52\u7CFB\u7EDF\u8F93\u5165\u6CD5\u3002\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
+    new import_obsidian3.Notice("\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u4E2D\u6587\u4E86\uFF0CJust Type \u5DF2\u505C\u6B62\u5DE5\u4F5C\u3002\u5982\u8981\u7EE7\u7EED\u7528 Just Type\uFF0C\u8BF7\u628A\u7CFB\u7EDF\u952E\u76D8\u5207\u56DE\u82F1\u6587 ABC\u3002", 8e3);
   }
   describeEvent(event) {
     const input = event;
@@ -3123,7 +3120,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     new import_obsidian3.Notice(message, 12e3);
   }
   openHelp(welcome = false) {
-    new HelpModal(this.app, welcome, this.settings.toggleKey, approxSize(CATALOG)).open();
+    new HelpModal(this.app, welcome, this.settings.toggleKey).open();
   }
   openWhatsNew() {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
