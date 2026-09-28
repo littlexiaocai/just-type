@@ -28,7 +28,13 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 ## 怎么用 · How to use
 
-**Just Type 专为 iPad、iPhone 外接键盘优化。在 Mac 上会和第三方输入法（如微信、搜狗）产生冲突，请在电脑端关闭 Just Type。** 装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
+**Just Type 专为 iPad 外接键盘优化。**
+
+在 iPhone 或 Mac 上，请打开 **Just Type IME 自己的设置页**（设置 → 左侧栏「第三方插件」分组下的「Just Type IME」），在里面打开「**在这台设备上停用**」。只影响这台设备，其他设备照常使用。
+
+⚠️ **不要**关闭「第三方插件 → 已安装插件」列表里 Just Type IME 旁边的那个开关。那个开关会随 Obsidian 同步，关掉后，其他设备上的 Just Type 也可能被一起关掉。
+
+装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
 
 1. **系统键盘切到英文 ABC，Just Type 接手**：可以输入拼音中文或英文。
 2. **系统键盘切到中文拼音，Just Type 退出**：按键归还系统输入法。
@@ -48,7 +54,7 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 ---
 
-**Just Type is made for iPad and iPhone with a hardware keyboard.** On a Mac it conflicts with third-party input methods (such as WeChat or Sogou), so please turn Just Type off on desktop. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
+**Just Type is made for iPad with a hardware keyboard.** On iPhone or Mac, open Just Type IME's own settings page (Settings → "Just Type IME" under Community plugins in the sidebar) and turn on "在这台设备上停用" (disable on this device). It only affects that device. Do **not** turn off the plugin's toggle in the installed-plugins list: with Sync, that toggle can turn Just Type off on your other devices too. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
 
 1. Switch the system keyboard to **English ABC** and Just Type takes over: type Pinyin Chinese or English.
 2. Switch the system keyboard to **Chinese Pinyin** and Just Type steps aside: keys go back to the system IME.

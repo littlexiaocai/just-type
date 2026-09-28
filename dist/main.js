@@ -1898,9 +1898,41 @@ var RELEASE_NOTES = [
   }
 ];
 
+// src/device.ts
+var STORE_KEY2 = "just-type-device";
+var DeviceSettings = class {
+  constructor(app) {
+    this.app = app;
+    this.state = this.load();
+  }
+  storageKey() {
+    const appId = this.app.appId;
+    return typeof appId === "string" && appId ? `${appId}-${STORE_KEY2}` : `${STORE_KEY2}:${this.app.vault.getName()}`;
+  }
+  load() {
+    try {
+      const raw = window.localStorage.getItem(this.storageKey());
+      const value = raw ? JSON.parse(raw) : null;
+      return value !== null && typeof value === "object" ? value : {};
+    } catch {
+      return {};
+    }
+  }
+  get disabled() {
+    return this.state.disabled === true;
+  }
+  setDisabled(on) {
+    this.state.disabled = on;
+    try {
+      window.localStorage.setItem(this.storageKey(), JSON.stringify(this.state));
+    } catch {
+    }
+  }
+};
+
 // src/main.ts
 var PLUGIN_VERSION = "1.0.0";
-var BUILD_TIME = true ? "2026/9/28 16:47:29" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/9/28 17:13:11" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2178,6 +2210,11 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
       aliases: ["help", "guide", "how to use", "\u5E2E\u52A9", "\u8BF4\u660E", "\u7528\u6CD5", "\u600E\u4E48\u7528"],
       action: () => this.plugin.openHelp()
     }, {
+      // 开关只记在这台设备本机（不写进同步的插件设置），用 render 自己画。
+      name: "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type",
+      aliases: ["disable", "device", "\u505C\u7528", "\u5173\u95ED", "\u8FD9\u53F0\u8BBE\u5907", "iPhone", "Mac"],
+      render: (setting) => this.plugin.renderDisableSetting(setting)
+    }, {
       name: "\u4E2D\u82F1\u6587\u5207\u6362\u952E",
       desc: "\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002",
       aliases: ["toggle", "Shift", "chinese", "english"],
@@ -2213,6 +2250,7 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     containerEl.empty();
     new import_obsidian3.Setting(containerEl).setName("\u4F7F\u7528\u8BF4\u660E").setDesc("\u600E\u4E48\u5207\u6362\u4E2D\u82F1\u6587\u3001\u9009\u8BCD\u3001\u6253\u8868\u60C5\uFF0C\u9047\u5230\u95EE\u9898\u5148\u770B\u8FD9\u91CC\u3002").addButton((button) => button.setButtonText("\u67E5\u770B").onClick(() => this.plugin.openHelp()));
+    this.cleanups.push(this.plugin.renderDisableSetting(new import_obsidian3.Setting(containerEl)));
     new import_obsidian3.Setting(containerEl).setName("\u4E2D\u82F1\u6587\u5207\u6362\u952E").setDesc("\u5355\u72EC\u6309\u4E00\u4E0B\u8FD9\u4E2A\u952E\uFF08\u4E2D\u95F4\u4E0D\u5939\u522B\u7684\u952E\uFF09\u5728\u4E2D\u6587\u548C\u82F1\u6587\u4E4B\u95F4\u5207\u6362\u3002\u547D\u4EE4\u9762\u677F\u91CC\u7684\u300C\u5207\u6362\u4E2D\u82F1\u6587 (toggle)\u300D\u59CB\u7EC8\u53EF\u7528\uFF0C\u4E5F\u53EF\u4EE5\u5728 Obsidian \u7684\u5FEB\u6377\u952E\u8BBE\u7F6E\u91CC\u81EA\u884C\u7ED1\u5B9A\u3002").addDropdown((dropdown) => {
       for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
         dropdown.addOption(value, label);
@@ -2262,16 +2300,39 @@ var WhatsNewModal = class extends import_obsidian3.Modal {
   }
 };
 var HelpModal = class extends import_obsidian3.Modal {
-  constructor(app, welcome, toggleKey) {
+  constructor(app, welcome, toggleKey, device) {
     super(app);
     this.welcome = welcome;
     this.toggleKey = toggleKey;
+    this.device = device;
+  }
+  /* 适用范围：专为 iPad 外接键盘；iPhone、Mac 上在 Just Type 自己的设置页停用，不要关已安装插件列表里的开关（会同步）。 */
+  renderScope(el) {
+    const box = el.createDiv({ cls: "just-type-help-scope" });
+    box.createEl("p").createEl("strong", { text: "Just Type \u4E13\u4E3A iPad \u5916\u63A5\u952E\u76D8\u4F18\u5316\u3002" });
+    const how = box.createEl("p", { text: "\u5728 iPhone \u6216 Mac \u4E0A\uFF0C\u8BF7\u6253\u5F00 " });
+    how.createEl("strong", { text: "Just Type IME \u81EA\u5DF1\u7684\u8BBE\u7F6E\u9875" });
+    how.append("\uFF08\u8BBE\u7F6E \u2192 \u5DE6\u4FA7\u680F\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6\u300D\u5206\u7EC4\u4E0B\u7684\u300CJust Type IME\u300D\uFF09\uFF0C\u5728\u91CC\u9762\u6253\u5F00\u300C");
+    how.createEl("strong", { text: "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" });
+    how.append("\u300D\u3002\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002");
+    const warn = box.createEl("p", { text: "\u26A0\uFE0F " });
+    warn.createEl("strong", { text: "\u4E0D\u8981" });
+    warn.append("\u5173\u95ED\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6 \u2192 \u5DF2\u5B89\u88C5\u63D2\u4EF6\u300D\u5217\u8868\u91CC Just Type IME \u65C1\u8FB9\u7684\u90A3\u4E2A\u5F00\u5173\u3002\u90A3\u4E2A\u5F00\u5173\u4F1A\u968F Obsidian \u540C\u6B65\uFF0C\u5173\u6389\u540E\uFF0C\u5176\u4ED6\u8BBE\u5907\u4E0A\u7684 Just Type \u4E5F\u53EF\u80FD\u88AB\u4E00\u8D77\u5173\u6389\u3002");
+    if (!this.device.showButton) return;
+    const button = box.createEl("button", { cls: "just-type-help-disable" });
+    const refresh = () => {
+      const off = this.device.isDisabled();
+      button.setText(off ? "\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" : "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528");
+      button.disabled = off;
+    };
+    refresh();
+    button.addEventListener("click", () => void this.device.disable().then(refresh));
   }
   onOpen() {
     this.setTitle(this.welcome ? "\u6B22\u8FCE\u4F7F\u7528 Just Type \xB7 \u5C31\u6253\u4E2A\u5B57" : "Just Type \xB7 \u4F7F\u7528\u8BF4\u660E");
     const el = this.contentEl;
     el.addClass("just-type-help");
-    el.createEl("p", { cls: "just-type-help-scope", text: "Just Type \u4E13\u4E3A iPad\u3001iPhone \u5916\u63A5\u952E\u76D8\u4F18\u5316\u3002\u5728 Mac \u4E0A\u4F1A\u548C\u7B2C\u4E09\u65B9\u8F93\u5165\u6CD5\uFF08\u5982\u5FAE\u4FE1\u3001\u641C\u72D7\uFF09\u4EA7\u751F\u51B2\u7A81\uFF0C\u8BF7\u5728\u7535\u8111\u7AEF\u5173\u95ED Just Type\u3002" });
+    this.renderScope(el);
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     const steps = [
       ["\u7CFB\u7EDF\u952E\u76D8\u5207\u5230\u300C\u82F1\u6587 ABC\u300D\uFF0CJust Type \u63A5\u624B", "\u53EF\u4EE5\u8F93\u5165\u62FC\u97F3\u4E2D\u6587\u6216\u82F1\u6587\u3002"],
@@ -2381,13 +2442,15 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.imeTookOver = false;
     this.traceEnabled = false;
     this.traceRawKeys = false;
+    this.deviceListeners = /* @__PURE__ */ new Set();
   }
   async onload() {
     const saved = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     Reflect.deleteProperty(this.settings, "preeditPosition");
+    this.device = new DeviceSettings(this.app);
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
-    this.log(`\u63D2\u4EF6 ${PLUGIN_VERSION} \u8F7D\u5165`);
+    this.log(`\u63D2\u4EF6 ${PLUGIN_VERSION} \u8F7D\u5165${this.device.disabled ? "\uFF08\u8FD9\u53F0\u8BBE\u5907\u4E0A\u5DF2\u505C\u7528\uFF09" : ""}`);
     this.updates = new UpdateChecker(this.app, PLUGIN_VERSION, (message) => this.log(message));
     this.upgradedFrom = this.updates.recordRun();
     if (this.settings.updateCheck) {
@@ -2413,7 +2476,23 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.invalidateEditorContext("active-leaf-change")));
     this.registerEvent(this.app.workspace.on("file-open", () => this.invalidateEditorContext("file-open")));
     this.registerInputProbes();
+    if (this.disabledHere) {
+      this.log("\u8FD9\u53F0\u8BBE\u5907\u4E0A\u5DF2\u505C\u7528 Just Type\uFF1A\u4E0D\u52A0\u8F7D\u5F15\u64CE\u3001\u4E0D\u63A5\u7BA1\u6309\u952E");
+      this.updateStatus();
+      return;
+    }
+    await this.startInput(true);
+  }
+  get disabledHere() {
+    return this.device?.disabled ?? false;
+  }
+  /**
+   * 加载引擎和词库，开始接管按键。启动时调用；在这台设备上从「停用」恢复时也调用（startup=false：
+   * 不再补弹「已更新」和第一次安装的欢迎窗口）。
+   */
+  async startInput(startup) {
     this.updateStatus("\u6B63\u5728\u52A0\u8F7D\u2026");
+    this.inputScope = this.addChild(new import_obsidian3.Component());
     try {
       await this.openDict();
       let client = await this.startBestFullEngine();
@@ -2429,10 +2508,10 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       this.ready = true;
       this.updateStatus();
       this.log(`\u5C31\u7EEA\uFF0C\u603B\u8017\u65F6 ${Date.now() - this.startedAt}ms`);
-      if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
+      if (startup && this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
       else new import_obsidian3.Notice(this.readyHint());
       this.startDictTasks();
-      if (this.updates?.isFirstRun()) {
+      if (startup && this.updates?.isFirstRun()) {
         try {
           this.openHelp(true);
         } catch (error) {
@@ -2448,6 +2527,64 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       new import_obsidian3.Notice(`Just Type \u52A0\u8F7D\u5931\u8D25\uFF1A${message}
 \u8FD0\u884C\u547D\u4EE4\u300C\u8BCA\u65AD\u62A5\u544A (report)\u300D\u67E5\u770B\u8BE6\u60C5`, 15e3);
     }
+  }
+  /** 在这台设备上停用：停掉引擎和词库任务，放开所有按键。学习记录和已下载的词库都留着，恢复时直接用。 */
+  stopInput() {
+    this.cancelComposition();
+    this.clearEmoji();
+    this.setInlinePreedit(void 0, "");
+    if (this.switchTimer !== void 0) window.clearTimeout(this.switchTimer);
+    if (this.dictFrame !== void 0) window.cancelAnimationFrame(this.dictFrame);
+    this.switchTimer = void 0;
+    this.dictFrame = void 0;
+    if (this.inputScope) this.removeChild(this.inputScope);
+    this.inputScope = void 0;
+    this.dict?.dispose();
+    this.dictStore?.close();
+    this.dictChip?.remove();
+    this.client?.destroy();
+    this.dict = void 0;
+    this.dictStore = void 0;
+    this.dictChip = void 0;
+    this.client = void 0;
+    this.ready = false;
+    this.composing = false;
+    this.engineId = null;
+    this.loadedDict = void 0;
+    this.engineQueue = void 0;
+    this.switching = void 0;
+    this.imeTookOver = false;
+    this.toggleArmed = false;
+    this.mode = "chinese";
+    this.updateStatus();
+  }
+  /** 设置页和使用说明里的「在这台设备上停用」。只记在本机，不会同步到其他设备。 */
+  async setDisabledHere(on) {
+    if (!this.device || on === this.disabledHere) return;
+    this.device.setDisabled(on);
+    if (on) {
+      this.stopInput();
+      this.log("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type");
+      new import_obsidian3.Notice("\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type\u3002\u5176\u4ED6\u8BBE\u5907\u4E0D\u53D7\u5F71\u54CD\uFF1B\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u8FD9\u4E2A\u5F00\u5173\u3002", 8e3);
+    } else {
+      this.log("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u6062\u590D Just Type");
+      await this.startInput(false);
+    }
+    for (const listener of this.deviceListeners) listener();
+  }
+  renderDisableSetting(setting) {
+    setting.setName("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type");
+    setting.setDesc("\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF1AJust Type \u4E0D\u63A5\u7BA1\u6309\u952E\u3001\u4E0D\u5F39\u63D0\u793A\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002\u8BF7\u7528\u8FD9\u91CC\u7684\u5F00\u5173\uFF0C\u4E0D\u8981\u5173\u5DF2\u5B89\u88C5\u63D2\u4EF6\u5217\u8868\u91CC\u7684\u90A3\u4E2A\u5F00\u5173\u3002");
+    let toggle;
+    setting.addToggle((t) => {
+      toggle = t;
+      t.setValue(this.disabledHere).onChange((value) => void this.setDisabledHere(value));
+    });
+    const refresh = () => {
+      if (toggle && toggle.getValue() !== this.disabledHere) toggle.setValue(this.disabledHere);
+    };
+    this.deviceListeners.add(refresh);
+    return () => this.deviceListeners.delete(refresh);
   }
   onunload() {
     this.setInlinePreedit(void 0, "");
@@ -2558,18 +2695,19 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
   startDictTasks() {
     const dict = this.dict;
-    if (!dict) return;
+    const scope = this.inputScope;
+    if (!dict || !scope) return;
     this.dictChip = new DictChip(() => this.openDictStatus());
     dict.onChange((status) => this.onDictStatus(status));
-    this.registerDomEvent(document, "visibilitychange", () => {
+    scope.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") dict.schedule("foreground");
     });
-    this.registerDomEvent(window, "online", () => dict.schedule("online"));
-    this.registerDomEvent(window, "resize", () => this.refreshDict());
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
-    this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
+    scope.registerDomEvent(window, "online", () => dict.schedule("online"));
+    scope.registerDomEvent(window, "resize", () => this.refreshDict());
+    scope.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
+    scope.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
     const timer = window.setTimeout(() => dict.schedule("startup"), 3e3);
-    this.register(() => window.clearTimeout(timer));
+    scope.register(() => window.clearTimeout(timer));
     this.onDictStatus(dict.status());
   }
   onDictStatus(status) {
@@ -2921,7 +3059,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
        见过中文输入法就提前提醒」，那是凭记忆猜——输入源随时会变，记忆必然过期，
        必然误报，0.7.8 已删除。 */
   noteSystemIme(event) {
-    if (event.type !== "compositionend") return;
+    if (this.disabledHere || event.type !== "compositionend") return;
     if (!CJK.test(event.data ?? "")) return;
     this.warnSystemImeTookOver();
   }
@@ -3040,6 +3178,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       ...this.dictReport(),
       "",
       "--- \u5F53\u524D\u72B6\u6001 ---",
+      `  \u8FD9\u53F0\u8BBE\u5907\u505C\u7528 = ${this.disabledHere}`,
       `  \u5F15\u64CE\u5C31\u7EEA ready = ${this.ready}`,
       `  \u8F93\u5165\u6A21\u5F0F mode = ${this.mode}`,
       `  \u7EC4\u5408\u4E2D composing = ${this.composing}`,
@@ -3120,7 +3259,12 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     new import_obsidian3.Notice(message, 12e3);
   }
   openHelp(welcome = false) {
-    new HelpModal(this.app, welcome, this.settings.toggleKey).open();
+    new HelpModal(this.app, welcome, this.settings.toggleKey, {
+      // iPad 是主力设备，不放停用按钮，免得误点；iPhone、电脑上放。
+      showButton: import_obsidian3.Platform.isPhone || import_obsidian3.Platform.isDesktopApp,
+      isDisabled: () => this.disabledHere,
+      disable: () => this.setDisabledHere(true)
+    }).open();
   }
   openWhatsNew() {
     const notes = RELEASE_NOTES.filter((note) => compareVersions(note.version, PLUGIN_VERSION) <= 0).slice(0, 3);
@@ -3239,10 +3383,18 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
      在表情模式下按 Shift 直接回中文，规则简单，不用记之前在哪。
      表情模式改由独立命令进入：iPad 上用系统地球键更顺手，这条留作后路。 */
   toggle() {
+    if (this.noticeIfDisabled()) return;
     this.setMode(this.mode === "chinese" ? "english" : "chinese");
   }
   toggleEmoji() {
+    if (this.noticeIfDisabled()) return;
     this.setMode(this.mode === "emoji" ? "chinese" : "emoji");
+  }
+  /** 停用时点状态栏、功能区图标或用切换命令：告诉用户在哪里恢复。 */
+  noticeIfDisabled() {
+    if (!this.disabledHere) return false;
+    new import_obsidian3.Notice("Just Type \u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528\u3002\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u300C\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528\u300D\u3002", 6e3);
+    return true;
   }
   setMode(next) {
     this.cancelComposition();
@@ -3257,14 +3409,14 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   }
   updateStatus(override) {
     const active = this.mode !== "english" && this.ready;
-    const label = override ?? MODE_LABEL[this.mode];
+    const label = override ?? (this.disabledHere ? "Just Type \u5DF2\u505C\u7528" : MODE_LABEL[this.mode]);
     if (this.status) {
       this.status.setText(label);
       this.status.toggleClass("is-enabled", active);
     }
     if (this.ribbon) {
       this.ribbon.toggleClass("is-enabled", active);
-      this.ribbon.setAttribute("aria-label", `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
+      this.ribbon.setAttribute("aria-label", this.disabledHere ? "Just Type\uFF1A\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" : `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
       (0, import_obsidian3.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
     }
   }
@@ -3385,6 +3537,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     return true;
   }
   onKeyup(event) {
+    if (this.disabledHere) return;
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
     if (event.isComposing || this.imeTookOver) return;
@@ -3436,6 +3589,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     new import_obsidian3.Notice(this.readyHint(), 6e3);
   }
   onKeydown(event) {
+    if (this.disabledHere) return;
     this.toggleArmed = this.isToggleKeyAlone(event) && !isSystemImeComposing(event) && !this.imeTookOver;
     this.keydownSeen += 1;
     const target = event.target instanceof Element ? event.target.className.toString().slice(0, 60) : event.target === null ? "null" : event.target.constructor.name;

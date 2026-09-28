@@ -1,4 +1,4 @@
-import { App, ButtonComponent, MarkdownView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon } from "obsidian";
+import { App, ButtonComponent, Component, MarkdownView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon, ToggleComponent } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
@@ -9,6 +9,7 @@ import { approxSize, DictChip, dictLine, DictStatusModal, fullDictIdentity, requ
 import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
+import { DeviceSettings } from "./device";
 
 const PLUGIN_VERSION = "1.0.0";
 declare const JT_BUILD_TIME: string;
@@ -416,6 +417,11 @@ class JustTypeSettingTab extends PluginSettingTab {
       aliases: ["help", "guide", "how to use", "帮助", "说明", "用法", "怎么用"],
       action: () => this.plugin.openHelp()
     }, {
+      // 开关只记在这台设备本机（不写进同步的插件设置），用 render 自己画。
+      name: "在这台设备上停用 Just Type",
+      aliases: ["disable", "device", "停用", "关闭", "这台设备", "iPhone", "Mac"],
+      render: (setting) => this.plugin.renderDisableSetting(setting)
+    }, {
       name: "中英文切换键",
       desc: "单独按一下这个键（中间不夹别的键）在中文和英文之间切换。命令面板里的「切换中英文 (toggle)」始终可用，也可以在 Obsidian 的快捷键设置里自行绑定。",
       aliases: ["toggle", "Shift", "chinese", "english"],
@@ -456,6 +462,8 @@ class JustTypeSettingTab extends PluginSettingTab {
       .setName("使用说明")
       .setDesc("怎么切换中英文、选词、打表情，遇到问题先看这里。")
       .addButton((button) => button.setButtonText("查看").onClick(() => this.plugin.openHelp()));
+
+    this.cleanups.push(this.plugin.renderDisableSetting(new Setting(containerEl)));
 
     new Setting(containerEl)
       .setName("中英文切换键")
@@ -521,16 +529,46 @@ class WhatsNewModal extends Modal {
  * 使用说明。这台设备第一次装好时弹一次（欢迎）；之后在设置页顶部和命令面板里随时能打开。
  * 内容就是上手最少要知道的几件事，加上遇到问题先看什么。切换键跟着设置变。
  */
+/** 使用说明里「在这台设备上停用」按钮要用到的：是否显示、现在是否已停用、怎么停用。 */
+interface DeviceControls {
+  showButton: boolean;
+  isDisabled(): boolean;
+  disable(): Promise<void>;
+}
+
 class HelpModal extends Modal {
-  constructor(app: App, private welcome: boolean, private toggleKey: ToggleKey) {
+  constructor(app: App, private welcome: boolean, private toggleKey: ToggleKey, private device: DeviceControls) {
     super(app);
+  }
+
+  /* 适用范围：专为 iPad 外接键盘；iPhone、Mac 上在 Just Type 自己的设置页停用，不要关已安装插件列表里的开关（会同步）。 */
+  private renderScope(el: HTMLElement): void {
+    const box = el.createDiv({ cls: "just-type-help-scope" });
+    box.createEl("p").createEl("strong", { text: "Just Type 专为 iPad 外接键盘优化。" });
+    const how = box.createEl("p", { text: "在 iPhone 或 Mac 上，请打开 " });
+    how.createEl("strong", { text: "Just Type IME 自己的设置页" });
+    how.append("（设置 → 左侧栏「第三方插件」分组下的「Just Type IME」），在里面打开「");
+    how.createEl("strong", { text: "在这台设备上停用" });
+    how.append("」。只影响这台设备，其他设备照常使用。");
+    const warn = box.createEl("p", { text: "⚠️ " });
+    warn.createEl("strong", { text: "不要" });
+    warn.append("关闭「第三方插件 → 已安装插件」列表里 Just Type IME 旁边的那个开关。那个开关会随 Obsidian 同步，关掉后，其他设备上的 Just Type 也可能被一起关掉。");
+    if (!this.device.showButton) return;
+    const button = box.createEl("button", { cls: "just-type-help-disable" });
+    const refresh = (): void => {
+      const off = this.device.isDisabled();
+      button.setText(off ? "已在这台设备上停用" : "在这台设备上停用");
+      button.disabled = off;
+    };
+    refresh();
+    button.addEventListener("click", () => void this.device.disable().then(refresh));
   }
 
   onOpen(): void {
     this.setTitle(this.welcome ? "欢迎使用 Just Type · 就打个字" : "Just Type · 使用说明");
     const el = this.contentEl;
     el.addClass("just-type-help");
-    el.createEl("p", { cls: "just-type-help-scope", text: "Just Type 专为 iPad、iPhone 外接键盘优化。在 Mac 上会和第三方输入法（如微信、搜狗）产生冲突，请在电脑端关闭 Just Type。" });
+    this.renderScope(el);
     const key = this.toggleKey === "none" ? null : TOGGLE_KEY_LABEL[this.toggleKey];
     // 最要紧的是前两条：系统键盘在英文 ABC 时 Just Type 才工作，切到中文拼音它就让出按键。
     const steps: [string, string][] = [
@@ -674,14 +712,20 @@ export default class JustTypePlugin extends Plugin {
   private imeTookOver = false;
   private traceEnabled = false;
   private traceRawKeys = false;
+  /* 只对这台设备生效的设置（不同步）。停用时不加载引擎、不接管按键、不弹提示。 */
+  private device?: DeviceSettings;
+  private deviceListeners = new Set<() => void>();
+  /* 词库任务挂的事件都放在这个子组件里，停用时整个卸掉，再启用时重新挂，不会越挂越多。 */
+  private inputScope?: Component;
 
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<JustTypeSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     // 1.0.0 起拼音固定显示在光标处，旧版本存下的「拼音显示位置」不再使用。
     Reflect.deleteProperty(this.settings, "preeditPosition");
+    this.device = new DeviceSettings(this.app);
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
-    this.log(`插件 ${PLUGIN_VERSION} 载入`);
+    this.log(`插件 ${PLUGIN_VERSION} 载入${this.device.disabled ? "（这台设备上已停用）" : ""}`);
 
     // 新版本提醒不依赖引擎：引擎加载失败的用户更需要知道有新版本。
     this.updates = new UpdateChecker(this.app, PLUGIN_VERSION, (message) => this.log(message));
@@ -707,8 +751,26 @@ export default class JustTypePlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.invalidateEditorContext("active-leaf-change")));
     this.registerEvent(this.app.workspace.on("file-open", () => this.invalidateEditorContext("file-open")));
     this.registerInputProbes();
-    this.updateStatus("正在加载…");
 
+    if (this.disabledHere) {
+      this.log("这台设备上已停用 Just Type：不加载引擎、不接管按键");
+      this.updateStatus();
+      return;
+    }
+    await this.startInput(true);
+  }
+
+  private get disabledHere(): boolean {
+    return this.device?.disabled ?? false;
+  }
+
+  /**
+   * 加载引擎和词库，开始接管按键。启动时调用；在这台设备上从「停用」恢复时也调用（startup=false：
+   * 不再补弹「已更新」和第一次安装的欢迎窗口）。
+   */
+  private async startInput(startup: boolean): Promise<void> {
+    this.updateStatus("正在加载…");
+    this.inputScope = this.addChild(new Component());
     try {
       // 只读本机状态、不联网：已经装好完整词库就直接用它（新版还没下完就先用本机的上一版），否则先用基础词库。
       await this.openDict();
@@ -725,12 +787,12 @@ export default class JustTypePlugin extends Plugin {
       this.ready = true;
       this.updateStatus();
       this.log(`就绪，总耗时 ${Date.now() - this.startedAt}ms`);
-      if (this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
+      if (startup && this.upgradedFrom) this.showUpgradedNotice(this.upgradedFrom);
       else new Notice(this.readyHint());
       this.startDictTasks();
       // 这台设备第一次装好：弹一次使用说明。更新不弹（更新时弹的是「这次更新了什么」）。
       // 放在最后、单独兜住：说明窗出任何问题都不能影响输入和词库下载。
-      if (this.updates?.isFirstRun()) {
+      if (startup && this.updates?.isFirstRun()) {
         try {
           this.openHelp(true);
         } catch (error) {
@@ -745,6 +807,67 @@ export default class JustTypePlugin extends Plugin {
       this.updateStatus("加载失败");
       new Notice(`Just Type 加载失败：${message}\n运行命令「诊断报告 (report)」查看详情`, 15000);
     }
+  }
+
+  /** 在这台设备上停用：停掉引擎和词库任务，放开所有按键。学习记录和已下载的词库都留着，恢复时直接用。 */
+  private stopInput(): void {
+    this.cancelComposition();
+    this.clearEmoji();
+    this.setInlinePreedit(undefined, "");
+    if (this.switchTimer !== undefined) window.clearTimeout(this.switchTimer);
+    if (this.dictFrame !== undefined) window.cancelAnimationFrame(this.dictFrame);
+    this.switchTimer = undefined;
+    this.dictFrame = undefined;
+    if (this.inputScope) this.removeChild(this.inputScope);
+    this.inputScope = undefined;
+    this.dict?.dispose();
+    this.dictStore?.close();
+    this.dictChip?.remove();
+    this.client?.destroy();
+    this.dict = undefined;
+    this.dictStore = undefined;
+    this.dictChip = undefined;
+    this.client = undefined;
+    this.ready = false;
+    this.composing = false;
+    this.engineId = null;
+    this.loadedDict = undefined;
+    this.engineQueue = undefined;
+    this.switching = undefined;
+    this.imeTookOver = false;
+    this.toggleArmed = false;
+    this.mode = "chinese";
+    this.updateStatus();
+  }
+
+  /** 设置页和使用说明里的「在这台设备上停用」。只记在本机，不会同步到其他设备。 */
+  async setDisabledHere(on: boolean): Promise<void> {
+    if (!this.device || on === this.disabledHere) return;
+    this.device.setDisabled(on);
+    if (on) {
+      this.stopInput();
+      this.log("在这台设备上停用 Just Type");
+      new Notice("已在这台设备上停用 Just Type。其他设备不受影响；要恢复，回到 Just Type IME 的设置页关掉这个开关。", 8000);
+    } else {
+      this.log("在这台设备上恢复 Just Type");
+      await this.startInput(false);
+    }
+    for (const listener of this.deviceListeners) listener();
+  }
+
+  renderDisableSetting(setting: Setting): () => void {
+    setting.setName("在这台设备上停用 Just Type");
+    setting.setDesc("只影响这台设备：Just Type 不接管按键、不弹提示，其他设备照常使用。请用这里的开关，不要关已安装插件列表里的那个开关。");
+    let toggle: ToggleComponent | undefined;
+    setting.addToggle((t) => {
+      toggle = t;
+      t.setValue(this.disabledHere).onChange((value) => void this.setDisabledHere(value));
+    });
+    const refresh = (): void => {
+      if (toggle && toggle.getValue() !== this.disabledHere) toggle.setValue(this.disabledHere);
+    };
+    this.deviceListeners.add(refresh);
+    return () => this.deviceListeners.delete(refresh);
   }
 
   onunload(): void {
@@ -865,19 +988,20 @@ export default class JustTypePlugin extends Plugin {
   /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
   private startDictTasks(): void {
     const dict = this.dict;
-    if (!dict) return;
+    const scope = this.inputScope;
+    if (!dict || !scope) return;
     this.dictChip = new DictChip(() => this.openDictStatus());
     dict.onChange((status) => this.onDictStatus(status));
-    this.registerDomEvent(document, "visibilitychange", () => {
+    scope.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") dict.schedule("foreground");
     });
-    this.registerDomEvent(window, "online", () => dict.schedule("online"));
-    this.registerDomEvent(window, "resize", () => this.refreshDict());
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
-    this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
+    scope.registerDomEvent(window, "online", () => dict.schedule("online"));
+    scope.registerDomEvent(window, "resize", () => this.refreshDict());
+    scope.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshDict()));
+    scope.registerEvent(this.app.workspace.on("layout-change", () => this.refreshDict()));
     // 让基础输入先稳下来，不和打开软件时的第一波输入抢资源。
     const timer = window.setTimeout(() => dict.schedule("startup"), 3000);
-    this.register(() => window.clearTimeout(timer));
+    scope.register(() => window.clearTimeout(timer));
     // 启动时已经是需要提示的状态（例如上次启用失败被停用）：按同样的规则处理一遍。
     this.onDictStatus(dict.status());
   }
@@ -1268,7 +1392,7 @@ export default class JustTypePlugin extends Plugin {
      见过中文输入法就提前提醒」，那是凭记忆猜——输入源随时会变，记忆必然过期，
      必然误报，0.7.8 已删除。 */
   private noteSystemIme(event: Event): void {
-    if (event.type !== "compositionend") return;
+    if (this.disabledHere || event.type !== "compositionend") return;
     if (!CJK.test((event as CompositionEvent).data ?? "")) return;
     this.warnSystemImeTookOver();
   }
@@ -1419,6 +1543,7 @@ export default class JustTypePlugin extends Plugin {
       ...this.dictReport(),
       "",
       "--- 当前状态 ---",
+      `  这台设备停用 = ${this.disabledHere}`,
       `  引擎就绪 ready = ${this.ready}`,
       `  输入模式 mode = ${this.mode}`,
       `  组合中 composing = ${this.composing}`,
@@ -1508,7 +1633,12 @@ export default class JustTypePlugin extends Plugin {
   }
 
   openHelp(welcome = false): void {
-    new HelpModal(this.app, welcome, this.settings.toggleKey).open();
+    new HelpModal(this.app, welcome, this.settings.toggleKey, {
+      // iPad 是主力设备，不放停用按钮，免得误点；iPhone、电脑上放。
+      showButton: Platform.isPhone || Platform.isDesktopApp,
+      isDisabled: () => this.disabledHere,
+      disable: () => this.setDisabledHere(true)
+    }).open();
   }
 
   openWhatsNew(): void {
@@ -1639,11 +1769,20 @@ export default class JustTypePlugin extends Plugin {
      在表情模式下按 Shift 直接回中文，规则简单，不用记之前在哪。
      表情模式改由独立命令进入：iPad 上用系统地球键更顺手，这条留作后路。 */
   private toggle(): void {
+    if (this.noticeIfDisabled()) return;
     this.setMode(this.mode === "chinese" ? "english" : "chinese");
   }
 
   private toggleEmoji(): void {
+    if (this.noticeIfDisabled()) return;
     this.setMode(this.mode === "emoji" ? "chinese" : "emoji");
+  }
+
+  /** 停用时点状态栏、功能区图标或用切换命令：告诉用户在哪里恢复。 */
+  private noticeIfDisabled(): boolean {
+    if (!this.disabledHere) return false;
+    new Notice("Just Type 已在这台设备上停用。要恢复，回到 Just Type IME 的设置页关掉「在这台设备上停用」。", 6000);
+    return true;
   }
 
   private setMode(next: InputMode): void {
@@ -1660,14 +1799,14 @@ export default class JustTypePlugin extends Plugin {
 
   private updateStatus(override?: string): void {
     const active = this.mode !== "english" && this.ready;
-    const label = override ?? MODE_LABEL[this.mode];
+    const label = override ?? (this.disabledHere ? "Just Type 已停用" : MODE_LABEL[this.mode]);
     if (this.status) {
       this.status.setText(label);
       this.status.toggleClass("is-enabled", active);
     }
     if (this.ribbon) {
       this.ribbon.toggleClass("is-enabled", active);
-      this.ribbon.setAttribute("aria-label", `Just Type：${MODE_NOTICE[this.mode]}`);
+      this.ribbon.setAttribute("aria-label", this.disabledHere ? "Just Type：已在这台设备上停用" : `Just Type：${MODE_NOTICE[this.mode]}`);
       setIcon(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
     }
   }
@@ -1810,6 +1949,7 @@ export default class JustTypePlugin extends Plugin {
   }
 
   private onKeyup(event: KeyboardEvent): void {
+    if (this.disabledHere) return;
     if (event.key !== this.settings.toggleKey || !this.toggleArmed) return;
     this.toggleArmed = false;
     if (event.isComposing || this.imeTookOver) return;
@@ -1867,6 +2007,7 @@ export default class JustTypePlugin extends Plugin {
   }
 
   private onKeydown(event: KeyboardEvent): void {
+    if (this.disabledHere) return;
     // 系统输入法在工作时（已提示「Just Type 已停止工作」），切换键归系统输入法：微信、搜狗等也用 Shift 切中英，
     // Just Type 再跟着切、弹「Just Type：英文」会误导。切回英文 ABC、正常打字后自动恢复。
     this.toggleArmed = this.isToggleKeyAlone(event) && !isSystemImeComposing(event) && !this.imeTookOver;
