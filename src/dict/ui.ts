@@ -19,10 +19,15 @@ export function fullDictIdentity(catalog: DictCatalog): DictIdentity {
   return { label: catalog.label, source: `${catalog.id}（${catalog.source}）`, files: catalog.files };
 }
 
+/** 引擎用的是哪个词库：新版完整词库、本机的上一版（新版还没好时先用它），还是内置词库。 */
+export type EngineKind = "current" | "previous" | "base";
+
 /** 插件这边的情况：引擎实际在用哪个词库、是否正在切换。 */
 export interface DictUiContext {
-  fullLoaded: boolean;
-  switching?: "full" | "base";
+  engine: EngineKind;
+  switching?: EngineKind;
+  /** 新版这次打开里启用失败过：本次不再自动试，下次打开或手动重试再说。 */
+  currentFailed?: boolean;
 }
 
 function mb(bytes: number): string {
@@ -51,37 +56,57 @@ export function dictLine(status: DictStatus | undefined, ctx: DictUiContext): Di
   const line = (text: string, chip: string | null, extra: Partial<DictLine> = {}): DictLine => ({ text, chip, normal: false, warn: false, ...extra });
   if (!status) return line("这台设备无法保存词库，暂时用内置词库", null, { warn: true });
   const size = `${mb(status.bytesDone)} / ${mb(status.bytesTotal)} MB`;
-  if (ctx.switching === "full") return line("正在启用词库…", "正在启用词库…");
+  // 用着本机的上一版、在后台换新版：用户照常有完整词库可用，说「更新」。
+  const updating = ctx.engine === "previous";
+  if (ctx.switching === "current") return updating ? line("正在换上新版词库…", "正在换上新版词库…") : line("正在启用词库…", "正在启用词库…");
+  if (ctx.switching === "previous") return line("正在启用上一版词库…", "正在启用上一版词库…");
   if (ctx.switching === "base") return line("正在切回内置词库…", "正在切回内置词库…");
   if (status.elsewhere && status.phase !== "active" && status.phase !== "ready" && status.phase !== "paused") {
     return line("另一个 Obsidian 窗口正在下载词库", "另一窗口正在下载词库");
   }
+  if (ctx.currentFailed && ctx.engine !== "current" && (status.phase === "ready" || status.phase === "active")) {
+    return line(updating ? "新版词库启用失败，继续用上一版，下次打开再试" : "词库启用失败，暂时用内置词库，下次打开再试", "词库启用失败",
+      { warn: true, action: { kind: "retry", label: "重试" } });
+  }
   switch (status.phase) {
     case "active":
     case "ready":
-      if (ctx.fullLoaded) return line("词库已就绪，之后不用联网", null, { normal: true });
-      return status.phase === "ready"
-        ? line("词库下载好了，停手后自动启用", "词库已下载，停手后启用")
-        : line("词库已下载，下次打开时启用", null);
+      if (ctx.engine === "current") return line("词库已就绪，之后不用联网", null, { normal: true });
+      if (status.phase === "ready") {
+        return updating
+          ? line("新版词库下载好了，停手后自动换上", "新版词库已下载，停手后换上")
+          : line("词库下载好了，停手后自动启用", "词库已下载，停手后启用");
+      }
+      return line("词库已下载，下次打开时启用", null);
     case "downloading":
-      return line(`正在下载词库 ${size}，下完前候选词会少一些，照常打字`, `正在下载词库 ${size}`, { action: { kind: "pause", label: "暂停" } });
+      return updating
+        ? line(`正在更新词库 ${size}，更新期间照常用上一版`, `正在更新词库 ${size}`, { action: { kind: "pause", label: "暂停" } })
+        : line(`正在下载词库 ${size}，下完前候选词会少一些，照常打字`, `正在下载词库 ${size}`, { action: { kind: "pause", label: "暂停" } });
     case "verifying":
-      return line("词库下载好了，正在校验", "词库校验中");
+      return line(updating ? "新版词库下载好了，正在校验" : "词库下载好了，正在校验", "词库校验中");
     case "waiting": {
-      if (status.error?.kind === "offline") return line("等待联网，联网后自动继续下载词库", "等待联网下载词库");
+      if (status.error?.kind === "offline") {
+        return updating ? line("等待联网更新词库，照常用上一版", "等待联网更新词库") : line("等待联网，联网后自动继续下载词库", "等待联网下载词库");
+      }
       const minutes = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - Date.now()) / 60_000)) : 0;
-      return line(minutes > 5 ? `词库暂未下载完成，约 ${minutes} 分钟后自动重试` : "词库暂未下载完成，稍后自动重试", "词库稍后重试",
+      const when = minutes > 5 ? `约 ${minutes} 分钟后自动重试` : "稍后自动重试";
+      return line(updating ? `词库更新暂未完成，${when}（照常用上一版）` : `词库暂未下载完成，${when}`, "词库稍后重试",
         { action: { kind: "retry", label: "立即重试" } });
     }
     case "paused":
       if (status.pausedReason === "baseOnly") return line("已停止使用下载的词库，暂时用内置词库", null, { action: { kind: "restore", label: "恢复" } });
-      return line(`已暂停下载词库${status.segmentsDone ? `（已下 ${mb(status.bytesDone)} MB）` : ""}`, null, { action: { kind: "resume", label: "继续" } });
+      return line(`已暂停${updating ? "更新" : "下载"}词库${status.segmentsDone ? `（已下 ${mb(status.bytesDone)} MB）` : ""}${updating ? "，照常用上一版" : ""}`, null,
+        { action: { kind: "resume", label: "继续" } });
     case "error":
       if (status.error?.kind === "storage") {
-        return line("存储空间不足，词库没下载完，暂时用内置词库", "词库：空间不足", { warn: true, action: { kind: "retry", label: "重试" } });
+        return line(`存储空间不足，${updating ? "新版词库没下载完，照常用上一版" : "词库没下载完，暂时用内置词库"}`, "词库：空间不足",
+          { warn: true, action: { kind: "retry", label: "重试" } });
       }
-      return line("词库启用失败，暂时用内置词库", "词库启用失败", { warn: true, action: { kind: "retry", label: "重试" } });
+      return updating
+        ? line("新版词库启用失败，继续用上一版", "新版词库启用失败", { warn: true, action: { kind: "retry", label: "重试" } })
+        : line("词库启用失败，暂时用内置词库", "词库启用失败", { warn: true, action: { kind: "retry", label: "重试" } });
     default:
+      if (updating) return line("有新版词库，稍后自动更新", null, { action: { kind: "download", label: "现在更新" } });
       return line(status.segmentsDone ? `已下载 ${size}，稍后自动接着下` : `还没下载词库（${approxSize(status.catalog)}），稍后自动开始`, null,
         { action: { kind: "download", label: "现在下载" } });
   }
@@ -148,7 +173,7 @@ export class DictStatusModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     const snap = this.controls.snapshot();
-    const line = dictLine(snap?.status, snap?.ctx ?? { fullLoaded: false });
+    const line = dictLine(snap?.status, snap?.ctx ?? { engine: "base" });
     contentEl.createEl("p", { text: line.text, cls: line.warn ? "just-type-dict-warn" : "" });
     if (snap) {
       const { status } = snap;

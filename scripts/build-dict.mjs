@@ -160,7 +160,17 @@ Just Type IME 插件的完整词库。插件首次使用时下载一次，之后
     sourceHashes
   };
   mkdirSync(join(ROOT, "src/dict"), { recursive: true });
-  writeFileSync(join(ROOT, "src/dict/catalog.json"), JSON.stringify(catalog, null, 2) + "\n");
+  // 换了词库版本：把旧清单挪进 previous-catalogs.json（新的在前，最多留 2 份）。新版插件据此在新词库下完之前
+  // 继续用设备上已装好的旧版，新版启用失败时也退回旧版；旧版不会被重新下载。
+  const catalogPath = join(ROOT, "src/dict/catalog.json");
+  const previousPath = join(ROOT, "src/dict/previous-catalogs.json");
+  const previous = existsSync(previousPath) ? JSON.parse(readFileSync(previousPath, "utf8")) : [];
+  if (existsSync(catalogPath)) {
+    const old = JSON.parse(readFileSync(catalogPath, "utf8"));
+    if (old.id !== catalog.id && !previous.some((c) => c.id === old.id)) previous.unshift(old);
+  }
+  writeFileSync(previousPath, JSON.stringify(previous.filter((c) => c.id !== catalog.id).slice(0, 2), null, 2) + "\n");
+  writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
   console.log(`\n打包 ${packed.filename}  ${tgz.length} B  sha256 ${catalog.tarball.sha256}`);
   console.log(`分段 ${segments.length} 段 × ${SEGMENT_BYTES} B，清单已写入 src/dict/catalog.json`);
   if (!existsSync(tgzPath)) throw new Error("tgz 不存在");

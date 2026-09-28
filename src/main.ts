@@ -3,9 +3,9 @@ import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
 import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
-import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictStatus } from "./dict/manager";
+import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictCatalog, type DictStatus } from "./dict/manager";
 import { DictStore } from "./dict/store";
-import { approxSize, DictChip, dictLine, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictAction, type DictControls, type DictUiContext } from "./dict/ui";
+import { approxSize, DictChip, dictLine, DictStatusModal, fullDictIdentity, requestUrlFetcher, type DictAction, type DictControls, type DictUiContext, type EngineKind } from "./dict/ui";
 import { searchEmoji, type EmojiEntry } from "./emoji";
 import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from "./update";
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
@@ -576,14 +576,14 @@ export default class JustTypePlugin extends Plugin {
   private dictListeners = new Set<() => void>();
   private dictFrame?: number;
   private dictNoticed = new Set<string>();
-  /* 引擎实际在用的词库，和下载任务的状态分开记。 */
-  private engineDict: "base" | "full" = "base";
+  /* 引擎实际在用的词库：完整词库的版本 id，null＝内置词库。和下载任务的状态分开记。 */
+  private engineId: string | null = null;
   /* 换引擎期间到来的按键，按到达顺序排队，新引擎（或退回的基础引擎）就绪后依次交给它。 */
   private engineQueue?: (() => void)[];
-  private switching?: "base" | "full";
+  private switching?: EngineKind;
   private switchTimer?: number;
-  /* 这次打开里完整词库启用失败过：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
-  private activationFailedThisRun = false;
+  /* 这次打开里启用失败过的词库版本：同一次里不反复启用同一个包，下次打开或手动重试再说。 */
+  private failedThisRun = new Set<string>();
   private lastCaptureAt = -Infinity;
   /* 这次启动已经提醒过的版本：同一次打开里不重复弹。 */
   private remindedVersion?: string;
@@ -649,15 +649,15 @@ export default class JustTypePlugin extends Plugin {
     this.updateStatus("正在加载…");
 
     try {
-      // 只读本机状态、不联网：已经装好完整词库就直接用它，否则先用基础词库。
+      // 只读本机状态、不联网：已经装好完整词库就直接用它（新版还没下完就先用本机的上一版），否则先用基础词库。
       await this.openDict();
-      let client = this.dict?.canActivate() ? await this.startFullEngine() : undefined;
+      let client = await this.startBestFullEngine();
       if (!client) {
         const t0assets = Date.now();
         const assets = await loadLocalAssets();
         this.log(`内嵌资源解压完成（${Date.now() - t0assets}ms）`);
         client = await this.startEngine(assets, "基础词库");
-        this.engineDict = "base";
+        this.engineId = null;
         this.loadedDict = embeddedDictIdentity();
       }
       this.client = client;
@@ -737,36 +737,59 @@ export default class JustTypePlugin extends Plugin {
     this.log(`完整词库状态：${status.phase}，已有 ${status.segmentsDone}/${status.segmentsTotal} 段${USING_DEV_URLS ? "（测试下载地址）" : ""}`);
   }
 
-  /** 启动时用已装好的完整词库起引擎。取不出、校验不过或起不来都返回 undefined，由调用方改用基础词库。 */
-  private async startFullEngine(): Promise<RimeWorkerClient | undefined> {
+  /** 启动时：先试新版完整词库，不行再试本机的上一版；都不行返回 undefined，由调用方用内置词库。 */
+  private async startBestFullEngine(): Promise<RimeWorkerClient | undefined> {
+    const dict = this.dict;
+    if (!dict) return undefined;
+    if (dict.canActivate()) {
+      const client = await this.startFullEngine(dict.catalog);
+      if (client) return client;
+    }
+    const previous = dict.fallbackCatalog();
+    return previous && !this.failedThisRun.has(previous.id) ? await this.startFullEngine(previous) : undefined;
+  }
+
+  private dictName(catalog: DictCatalog | null): string {
+    if (!catalog) return "基础词库";
+    return catalog.id === this.dict?.catalog.id ? "完整词库" : `上一版词库 ${catalog.id}`;
+  }
+
+  /** 用已装好的某个版本的完整词库起引擎。取不出、校验不过或起不来都返回 undefined。 */
+  private async startFullEngine(catalog: DictCatalog): Promise<RimeWorkerClient | undefined> {
     const dict = this.dict!;
+    const name = this.dictName(catalog);
     const t0 = Date.now();
     try {
-      const files = await dict.extractInstalled();
+      const files = await dict.extractInstalled(catalog);
       if (!files) {
-        this.dictLog("完整词库校验未通过，这次用基础词库，稍后自动补下");
+        this.dictLog(`${name}校验未通过，这次不用它`);
         return undefined;
       }
-      this.dictLog(`完整词库取出并校验完成（${Date.now() - t0}ms）`);
+      this.dictLog(`${name}取出并校验完成（${Date.now() - t0}ms）`);
       const assets = await this.fullAssets(files);
-      await dict.beginActivation();
+      await dict.beginActivation(catalog.id);
       try {
-        const client = await this.startEngine(assets, "完整词库", true);
-        await dict.endActivation(true);
-        this.engineDict = "full";
-        this.loadedDict = fullDictIdentity(dict.catalog);
-        this.dictLog(`启动即用完整词库（取出校验＋加载共 ${Date.now() - t0}ms）`);
-        this.noticeOnce("activated", "词库已下载好，之后不用联网");
+        const client = await this.startEngine(assets, name, true);
+        await dict.endActivation(true, "", catalog.id);
+        this.engineId = catalog.id;
+        this.loadedDict = fullDictIdentity(catalog);
+        this.dictLog(`启动即用${name}（取出校验＋加载共 ${Date.now() - t0}ms）`);
+        if (catalog.id === dict.catalog.id) this.announceActivated();
         return client;
       } catch (error) {
-        this.activationFailedThisRun = true;
-        await dict.endActivation(false, this.errorMessage(error));
+        this.failedThisRun.add(catalog.id);
+        await dict.endActivation(false, this.errorMessage(error), catalog.id);
         throw error;
       }
     } catch (error) {
-      this.dictLog(`完整词库启用失败，改用基础词库：${this.errorMessage(error)}`);
+      this.dictLog(`${name}启用失败：${this.errorMessage(error)}`);
       return undefined;
     }
+  }
+
+  /** 新版完整词库第一次启用成功：只提示一次。原来用着上一版的，说「已更新」。 */
+  private announceActivated(): void {
+    this.noticeOnce("activated", this.dict?.hadPrevious() ? "词库已更新到新版" : "词库已下载好，之后不用联网");
   }
 
   /** 基础输入就绪后：挂上状态条和前台、联网事件，稍后开始（或接着）下载。 */
@@ -792,7 +815,9 @@ export default class JustTypePlugin extends Plugin {
   private onDictStatus(status: DictStatus): void {
     this.refreshDict();
     if (status.phase === "downloading" && !status.resuming) {
-      this.noticeOnce("download-started", `正在后台下载词库（${approxSize(status.catalog)}），下载期间照常打字。`);
+      this.noticeOnce("download-started", this.kindOf(this.engineId) === "previous"
+        ? `正在后台更新词库（${approxSize(status.catalog)}），更新期间照常用上一版。`
+        : `正在后台下载词库（${approxSize(status.catalog)}），下载期间照常打字。`);
     }
     if (status.phase === "error" && status.error) {
       this.noticeOnce(`error-${status.error.kind}`, `Just Type：${dictLine(status, this.dictContext()).text}。可在设置里重试。`, 12000);
@@ -816,8 +841,13 @@ export default class JustTypePlugin extends Plugin {
     });
   }
 
+  private kindOf(id: string | null): EngineKind {
+    if (id === null) return "base";
+    return id === this.dict?.catalog.id ? "current" : "previous";
+  }
+
   private dictContext(): DictUiContext {
-    return { fullLoaded: this.engineDict === "full", switching: this.switching };
+    return { engine: this.kindOf(this.engineId), switching: this.switching, currentFailed: this.dict ? this.failedThisRun.has(this.dict.catalog.id) : false };
   }
 
   /** 状态条和打开着的详情窗跟着刷新，一帧最多一次。 */
@@ -833,9 +863,16 @@ export default class JustTypePlugin extends Plugin {
     });
   }
 
-  /** 该用哪个词库：已下载齐、没被停用、没选只用基础词库，且这次打开里没启用失败过，就用完整词库。 */
-  private wantedDict(): "base" | "full" {
-    return this.dict?.canActivate() && !this.activationFailedThisRun ? "full" : "base";
+  /**
+   * 该用哪个词库：新版已下载齐、没被停用、没选只用基础词库，就用新版；否则用本机已有的上一版；
+   * 都没有就用内置词库。这次打开里启用失败过的版本不再用。
+   */
+  private wantedCatalog(): DictCatalog | null {
+    const dict = this.dict;
+    if (!dict) return null;
+    if (dict.canActivate() && !this.failedThisRun.has(dict.catalog.id)) return dict.catalog;
+    const previous = dict.fallbackCatalog();
+    return previous && !this.failedThisRun.has(previous.id) ? previous : null;
   }
 
   /** 用户停手：没有正在打的拼音或表情，2 秒内没按过键，窗口在前台。 */
@@ -847,12 +884,12 @@ export default class JustTypePlugin extends Plugin {
   /** 实际在用的和该用的不一致时，等用户停手再换。一直在打字就一直等，停下来就换。 */
   private syncEngine(): void {
     if (!this.ready || this.switching || this.switchTimer !== undefined) return;
-    if (this.wantedDict() === this.engineDict) return;
+    if ((this.wantedCatalog()?.id ?? null) === this.engineId) return;
     const check = (): void => {
       this.switchTimer = undefined;
       if (!this.ready || this.switching) return;
-      const want = this.wantedDict();
-      if (want === this.engineDict) return;
+      const want = this.wantedCatalog();
+      if ((want?.id ?? null) === this.engineId) return;
       if (!this.inputIdle()) {
         this.switchTimer = window.setTimeout(check, 1000);
         return;
@@ -865,21 +902,23 @@ export default class JustTypePlugin extends Plugin {
   /**
    * 换引擎。先在旧引擎照常服务时把新词库准备好（取出、校验、备份学习记录），
    * 再用很短的时间停旧起新；这期间的按键排队，新引擎就绪后按原顺序处理。
-   * 新引擎起不来就退回基础词库。两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
+   * 新引擎起不来就退回本机的上一版完整词库，再不行用基础词库。
+   * 两个 Worker 不同时挂着用户词典：同时写同一份学习记录会互相覆盖。
    */
-  private async switchEngine(target: "base" | "full"): Promise<void> {
+  private async switchEngine(target: DictCatalog | null): Promise<void> {
     const dict = this.dict;
-    if (this.switching || !this.client || (target === "full" && !dict)) return;
-    const label = target === "full" ? "完整词库" : "基础词库";
-    this.switching = target;
+    if (this.switching || !this.client || (target && !dict)) return;
+    const label = this.dictName(target);
+    const kind = this.kindOf(target?.id ?? null);
+    this.switching = kind;
     this.refreshDict();
     const t0 = Date.now();
 
     let assets: LocalAssets;
     try {
-      if (target === "full") {
-        const files = await dict!.extractInstalled();
-        if (!files) throw new Error("完整词库校验未通过");
+      if (target) {
+        const files = await dict!.extractInstalled(target);
+        if (!files) throw new Error(`${label}校验未通过`);
         assets = await this.fullAssets(files);
         await this.backupUserDict();
       } else {
@@ -905,23 +944,23 @@ export default class JustTypePlugin extends Plugin {
     old.destroy();
     this.client = undefined;
     try {
-      if (target === "full") await dict!.beginActivation();
-      this.client = await this.startEngine(assets, label, target === "full");
-      this.engineDict = target;
-      this.loadedDict = target === "full" ? fullDictIdentity(dict!.catalog) : embeddedDictIdentity();
-      if (target === "full") {
-        await dict!.endActivation(true);
-        this.noticeOnce("activated", "词库已下载好，之后不用联网");
+      if (target) await dict!.beginActivation(target.id);
+      this.client = await this.startEngine(assets, label, Boolean(target));
+      this.engineId = target?.id ?? null;
+      this.loadedDict = target ? fullDictIdentity(target) : embeddedDictIdentity();
+      if (target) {
+        await dict!.endActivation(true, "", target.id);
+        if (kind === "current") this.announceActivated();
       }
       this.dictLog(`已切换到${label}（准备＋切换共 ${Date.now() - t0}ms）`);
     } catch (error) {
       const message = this.errorMessage(error);
       this.dictLog(`切换到${label}失败：${message}`);
-      if (target === "full") {
-        this.activationFailedThisRun = true;
-        await dict!.endActivation(false, message);
+      if (target) {
+        this.failedThisRun.add(target.id);
+        await dict!.endActivation(false, message, target.id);
       }
-      if (!this.client) await this.recoverBaseEngine();
+      if (!this.client) await this.recoverEngine();
     } finally {
       this.switching = undefined;
       const queued = this.engineQueue ?? [];
@@ -932,11 +971,19 @@ export default class JustTypePlugin extends Plugin {
     }
   }
 
-  /** 新引擎起不来时重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
-  private async recoverBaseEngine(): Promise<void> {
+  /** 新引擎起不来时：先退回本机的上一版完整词库，再不行重建基础词库引擎。连它也起不来就如实显示加载失败，不假装就绪。 */
+  private async recoverEngine(): Promise<void> {
+    const previous = this.dict?.fallbackCatalog();
+    if (previous && !this.failedThisRun.has(previous.id)) {
+      const client = await this.startFullEngine(previous);
+      if (client) {
+        this.client = client;
+        return;
+      }
+    }
     try {
       this.client = await this.startEngine(await loadLocalAssets(), "基础词库");
-      this.engineDict = "base";
+      this.engineId = null;
       this.loadedDict = embeddedDictIdentity();
     } catch (error) {
       const message = this.errorMessage(error);
@@ -1005,7 +1052,7 @@ export default class JustTypePlugin extends Plugin {
     else if (kind === "resume") void dict.resume();
     else {
       // 用户明确要求：这次打开里启用失败过的包也重新检查一次。
-      this.activationFailedThisRun = false;
+      this.failedThisRun.clear();
       void (kind === "restore" ? dict.setBaseOnly(false) : dict.retryNow());
     }
   }
@@ -1043,7 +1090,7 @@ export default class JustTypePlugin extends Plugin {
     const dict = this.dict;
     if (!dict) return;
     await dict.removeDownloaded();
-    this.activationFailedThisRun = false;
+    this.failedThisRun.clear();
     await dict.setBaseOnly(false);
     new Notice("已删除本机的词库数据，正在重新下载。学习记录不受影响。", 6000);
   }
@@ -1338,7 +1385,8 @@ export default class JustTypePlugin extends Plugin {
       `  阶段 ${s.phase}｜已核对 ${s.segmentsDone}/${s.segmentsTotal} 段（${s.bytesDone}/${s.bytesTotal} B）｜接着下 ${s.resuming}`,
       `  暂停意图 ${s.pausedReason ?? "无"}｜下次自动重试 ${time(s.nextRetryAt)}`,
       `  最近错误 ${s.error ? `${s.error.kind}：${s.error.message}` : "无"}`,
-      `  引擎在用 ${this.engineDict}｜切换中 ${this.switching ?? "否"}｜这次启用失败过 ${this.activationFailedThisRun}｜记录的启用版本 ${s.activeId ?? "无"}｜另一窗口在下 ${s.elsewhere}`,
+      `  引擎在用 ${this.engineId ?? "内置词库"}｜切换中 ${this.switching ?? "否"}｜这次启用失败过 ${[...this.failedThisRun].join("、") || "无"}｜记录的启用版本 ${s.activeId ?? "无"}｜另一窗口在下 ${s.elsewhere}`,
+      `  插件认得的上一版 ${dict.previous.map((c) => c.id).join("、") || "无"}｜本机可用的上一版 ${dict.fallbackCatalog()?.id ?? "无"}`,
       `  设备在线 navigator.onLine = ${String(navigator.onLine)}`,
       `  最近下载事件（跨重启保留，最多 60 条）：`,
       ...(s.history.length ? s.history.map((line) => `    ${line}`) : ["    （无）"])

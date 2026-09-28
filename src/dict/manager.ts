@@ -10,6 +10,7 @@
  * - 不碰用户词典（它在另一个 IndexedDB 库里）。
  */
 import catalogJson from "./catalog.json";
+import previousJson from "./previous-catalogs.json";
 import { DictStore } from "./store";
 import { extractTgz, TarError } from "./tar";
 
@@ -34,6 +35,13 @@ const DEV_URLS = typeof JT_DEV_DICT_URLS !== "undefined" ? JT_DEV_DICT_URLS : nu
 const BUILT_IN: DictCatalog = catalogJson;
 export const CATALOG: DictCatalog = DEV_URLS ? { ...BUILT_IN, urls: DEV_URLS } : BUILT_IN;
 export const USING_DEV_URLS = Boolean(DEV_URLS);
+
+/**
+ * 上一版（或几版）词库的清单，新的在前。发布新版词库时由构建脚本把旧的 catalog.json 挪进来。
+ * 用处只有一个：新版还没下完时，设备上已经装好的旧版照常可用；新版启用失败时退回旧版。
+ * 旧版不会被重新下载——只认本机已有、且每段都和它自己的清单对得上的数据。
+ */
+export const PREVIOUS_CATALOGS: DictCatalog[] = previousJson;
 
 export type ErrorKind =
   | "offline"      // 明确离线
@@ -206,13 +214,19 @@ export class DictManager {
   /** 用 Web Locks 拿到的锁：调用即释放。 */
   private releaseWebLock?: () => void;
 
+  /** 本机上每个旧版已有几段（只在启动时数一次；新版启用成功、清理后清空）。 */
+  private previousPresent = new Map<string, number>();
+  /** 启动时本机装着旧版：新版第一次启用时提示「已更新」而不是「已下载好」。 */
+  private previousAtStart = false;
+
   constructor(
     private store: DictStore,
     private fetcher: RangeFetcher,
     readonly catalog: DictCatalog = CATALOG,
     private config: DictConfig = DEFAULT_CONFIG,
     private log: (message: string) => void = () => undefined,
-    private now: () => number = () => Date.now()
+    private now: () => number = () => Date.now(),
+    readonly previous: DictCatalog[] = PREVIOUS_CATALOGS
   ) {}
 
   /* ---------------- 状态 ---------------- */
@@ -239,11 +253,19 @@ export class DictManager {
       this.state.activation = undefined;
       this.record(`检测到上次启用 ${act.id} 未完成，记为一次失败`);
       if (act.id === this.catalog.id) this.recordActivationFailure("上次启用途中退出");
+      // 旧版只是过渡用，启用途中崩溃一次就不再用它，直接用内置词库等新版。
+      else if (this.previous.some((c) => c.id === act.id)) this.quarantineId(act.id, "上次启用途中退出");
     }
+    for (const c of this.previous) {
+      const n = (await this.store.segmentIndexes(c.id)).size;
+      if (n) this.previousPresent.set(c.id, n);
+    }
+    this.previousAtStart = this.previousPresent.size > 0;
     this.present = await this.store.segmentIndexes(this.catalog.id);
     this.resuming = this.present.size > 0 && this.present.size < this.catalog.tarball.segments.length;
     this.phase = this.derivePhase();
-    this.record(`启动：阶段 ${this.phase}，已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段${this.state.nextRetryAt ? `，下次重试 ${stamp(this.state.nextRetryAt)}` : ""}`);
+    const fallback = this.fallbackCatalog();
+    this.record(`启动：阶段 ${this.phase}，已有 ${this.present.size}/${this.catalog.tarball.segments.length} 段${this.state.nextRetryAt ? `，下次重试 ${stamp(this.state.nextRetryAt)}` : ""}${fallback ? `；本机有可用的上一版 ${fallback.id}` : ""}`);
     await this.save();
     this.emit();
   }
@@ -262,8 +284,21 @@ export class DictManager {
     return this.present.size === this.catalog.tarball.segments.length;
   }
 
-  isQuarantined(): boolean {
-    return Boolean(this.state.quarantine?.[this.catalog.id]);
+  isQuarantined(id = this.catalog.id): boolean {
+    return Boolean(this.state.quarantine?.[id]);
+  }
+
+  /**
+   * 新版还不能用时可以先用的旧版：本机已有全部分段、没被停用、用户没选只用基础词库。
+   * 只数分段是否齐全；真正启用前 extractInstalled 还会逐段、逐文件核对。
+   */
+  hadPrevious(): boolean {
+    return this.previousAtStart;
+  }
+
+  fallbackCatalog(): DictCatalog | undefined {
+    if (this.state.paused === "baseOnly") return undefined;
+    return this.previous.find((c) => this.previousPresent.get(c.id) === c.tarball.segments.length && !this.isQuarantined(c.id));
   }
 
   status(): DictStatus {
@@ -808,16 +843,25 @@ export class DictManager {
    * 把已下载的分段拼回 tgz，解包，逐个核对文件 sha256。成功返回文件内容。
    * 失败时找出坏掉的分段删掉（下次只补这些），整包格式不对则隔离，不无限重下。
    */
-  async extractInstalled(): Promise<Map<string, Uint8Array> | null> {
+  async extractInstalled(catalog: DictCatalog = this.catalog): Promise<Map<string, Uint8Array> | null> {
+    const current = catalog.id === this.catalog.id;
     const buffers: ArrayBuffer[] = [];
     const bad: number[] = [];
-    for (let i = 0; i < this.catalog.tarball.segments.length; i++) {
-      const data = await this.store.getSegment(this.catalog.id, i);
-      if (!data || (await sha256Hex(data)) !== this.catalog.tarball.segments[i]) { bad.push(i); continue; }
+    for (let i = 0; i < catalog.tarball.segments.length; i++) {
+      const data = await this.store.getSegment(catalog.id, i);
+      if (!data || (await sha256Hex(data)) !== catalog.tarball.segments[i]) { bad.push(i); continue; }
       buffers.push(data);
     }
     if (bad.length) {
-      for (const i of bad) { await this.store.deleteSegment(this.catalog.id, i); this.present.delete(i); }
+      for (const i of bad) await this.store.deleteSegment(catalog.id, i);
+      if (!current) {
+        // 旧版不会重新下载：坏了就不再用它，等新版。
+        this.previousPresent.delete(catalog.id);
+        this.quarantineId(catalog.id, `${bad.length} 段缺失或损坏`);
+        await this.save();
+        return null;
+      }
+      for (const i of bad) this.present.delete(i);
       this.state.activeId = undefined;
       this.record(`完整词库有 ${bad.length} 段缺失或损坏，已丢弃，稍后自动补下`);
       this.phase = this.derivePhase();
@@ -826,15 +870,17 @@ export class DictManager {
       return null;
     }
     try {
-      const files = await extractTgz(new Blob(buffers).stream(), this.catalog.files);
-      for (const f of this.catalog.files) {
+      const files = await extractTgz(new Blob(buffers).stream(), catalog.files);
+      for (const f of catalog.files) {
         const body = files.get(f.name)!;
         if ((await sha256Hex(body)) !== f.sha256) throw new TarError(`${f.name} 校验不符`);
       }
       return files;
     } catch (error) {
       // 分段都对、整包却解不开：说明包本身和插件不兼容，隔离，等新版插件或用户手动复查。
-      this.quarantine(`格式或内容与清单不符：${error instanceof Error ? error.message : String(error)}`, "format");
+      const reason = `格式或内容与清单不符：${error instanceof Error ? error.message : String(error)}`;
+      if (current) this.quarantine(reason, "format");
+      else this.quarantineId(catalog.id, reason);
       await this.save();
       this.emit();
       return null;
@@ -847,6 +893,13 @@ export class DictManager {
     return this.isQuarantined() ? "quarantined" : "repair";
   }
 
+  /** 只把某个版本记为停用，不改当前任务的状态（旧版用）。 */
+  private quarantineId(id: string, reason: string): void {
+    this.state.quarantine = { ...(this.state.quarantine ?? {}), [id]: { reason, at: this.now() } };
+    if (this.state.activeId === id) this.state.activeId = undefined;
+    this.record(`${id} 已停用：${reason}`);
+  }
+
   private quarantine(reason: string, kind: ErrorKind): void {
     this.state.quarantine = { ...(this.state.quarantine ?? {}), [this.catalog.id]: { reason, at: this.now() } };
     this.state.lastError = { kind, message: reason, at: this.now() };
@@ -857,20 +910,27 @@ export class DictManager {
 
   /* ---------------- 启用记录 ---------------- */
 
-  /** 插件开始用完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
-  async beginActivation(): Promise<void> {
-    this.state.activation = { id: this.catalog.id, startedAt: this.now() };
+  /** 插件开始用某个版本的完整词库初始化引擎之前调用：留下标记，启动途中崩溃下次就能识别。 */
+  async beginActivation(id = this.catalog.id): Promise<void> {
+    this.state.activation = { id, startedAt: this.now() };
     await this.save();
   }
 
-  async endActivation(ok: boolean, message = ""): Promise<void> {
+  async endActivation(ok: boolean, message = "", id = this.catalog.id): Promise<void> {
     this.state.activation = undefined;
-    if (ok) {
+    if (id !== this.catalog.id) {
+      // 旧版：成功就记为在用（新版的下载照常进行）；失败就不再用它。
+      if (ok) this.state.activeId = id;
+      else this.quarantineId(id, message || "引擎加载失败");
+    } else if (ok) {
       this.state.activeId = this.catalog.id;
       this.state.activationFailures = 0;
       this.state.lastError = undefined;
       this.phase = "active";
-      // 新包启用成功后才清理旧版本的分段，保证任何时候都至少有一个可恢复的状态。
+      // 新版启用成功后才清理旧版本的分段，保证任何时候都至少有一个可恢复的状态。
+      // 只删词库分段，学习记录在另一个数据库（/rime），碰不到。
+      if (this.previousPresent.size) this.record(`新版 ${this.catalog.id} 已启用，清理旧版分段`);
+      this.previousPresent.clear();
       void this.store.pruneSegments(this.catalog.id).catch(() => undefined);
     } else {
       this.recordActivationFailure(message || "引擎加载失败");
