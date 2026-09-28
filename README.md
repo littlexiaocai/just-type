@@ -4,9 +4,19 @@
 
 Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
 
-## 最近更新 · What's new（1.0.0）
+## 最近更新 · What's new（1.0.1）
 
-### 🎉 词库大升级，打字更畅快：从约 6.5 万条扩充到约 187 万条
+- **增加了「在这台设备上停用」的独立设置**：iPhone 和 Mac 上不用再去关插件开关，iPad 上的 Just Type 照常工作
+- **修好了 Shift 的问题**：用微信、搜狗等输入法时按 Shift，Just Type 不再跟着切换、乱弹提示
+- **增加了使用说明**：第一次安装时会弹出，之后在 Just Type IME 的设置页里随时能看
+- **优化了更新词库的方式**：以后词库有新版本时，新词库下完之前照常用原来的，不会临时变差
+
+- **New "disable on this device" setting**: turn Just Type off on iPhone or Mac without touching the plugin toggle, so Just Type keeps working on your iPad
+- **Shift fixed**: with WeChat, Sogou or other input methods, pressing Shift no longer toggles Just Type or shows stray notices
+- **A usage guide**: shown on first install, and available any time from Just Type IME's settings page
+- **Smoother dictionary updates**: when a new dictionary version comes out, you keep using the current one until the new one has finished downloading
+
+### 1.0.0 · 🎉 词库大升级，打字更畅快：从约 6.5 万条扩充到约 187 万条
 
 三字词、四字成语、常用说法一打就出来，候选更准，少翻页。词库来自[雾凇拼音](https://github.com/iDvel/rime-ice)，第一次打开后在后台自动下载约 26 MB，下载期间照常打字，下好后在你停手时自动换上，之后不用联网。
 
@@ -15,7 +25,7 @@ Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pin
 - **换词库不影响**输入法已经记住的你的用词习惯
 - **设置页更简洁**：正常时只显示版本；拼音固定显示在光标处，和微信、搜狗一样
 
-### 🎉 A big dictionary upgrade for smoother typing: from about 65 thousand to about 1.87 million entries
+### 1.0.0 · 🎉 A big dictionary upgrade for smoother typing: from about 65 thousand to about 1.87 million entries
 
 Three-character words, four-character idioms and everyday phrases come up right away, with better candidates and less paging. The dictionary comes from [rime-ice](https://github.com/iDvel/rime-ice). On first launch about 26 MB downloads in the background while you keep typing; it is switched in when you pause, then works offline.
 

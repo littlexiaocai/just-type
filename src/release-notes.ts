@@ -9,6 +9,15 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "1.0.1",
+    items: [
+      "增加了「在这台设备上停用」的独立设置：iPhone 和 Mac 上不用再去关插件开关，iPad 上的 Just Type 照常工作",
+      "修好了 Shift 的问题：用微信、搜狗等输入法时按 Shift，Just Type 不再跟着切换、乱弹提示",
+      "增加了使用说明：第一次安装时会弹出，之后在 Just Type IME 的设置页里随时能看",
+      "优化了更新词库的方式：以后词库有新版本时，新词库下完之前照常用原来的，不会临时变差"
+    ]
+  },
+  {
     version: "1.0.0",
     items: [
       "词库大升级，打字更畅快：从约 6.5 万条扩充到约 187 万条（来自雾凇拼音），三字词、四字成语、常用说法一打就出来。第一次打开后在后台自动下载约 26 MB，下载期间照常打字，下好后在你停手时自动换上，之后不用联网",
