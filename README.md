@@ -38,11 +38,12 @@ Three-character words, four-character idioms and everyday phrases come up right 
 
 ## 怎么用 · How to use
 
-**Just Type 专为 iPad 外接键盘优化。**
+**什么情况建议先停用 Just Type 插件？**
 
-在 iPhone 或 Mac 上，请打开 **Just Type IME 自己的设置页**（设置 → 左侧栏「第三方插件」分组下的「Just Type IME」），在里面打开「**仅在此设备停用 Just Type**」。只影响这台设备，其他设备照常使用。
+- **Mac**：建议停用，避免 Shift 与第三方输入法冲突。
+- **iPhone、iPad**：使用屏幕键盘时建议停用，连接外接键盘时再启用 Just Type。
 
-⚠️ **不要**关闭「第三方插件 → 已安装插件」列表里 Just Type IME 旁边的那个开关。那个开关会随 Obsidian 同步，关掉后，其他设备上的 Just Type 也可能被一起关掉。
+如需停用，请打开 **设置 → Just Type IME → 仅在此设备停用 Just Type**，无需关闭插件列表中的开关。
 
 装好后第一次打开会弹出使用说明，之后在 **设置 → Just Type IME → 使用说明** 随时能看。
 
@@ -60,11 +61,11 @@ Three-character words, four-character idioms and everyday phrases come up right 
 **遇到问题**
 
 - 打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 Shift 切到中文
-- 还是不行：请发邮件到 [xxyybear@gmail.com](mailto:xxyybear@gmail.com)
+- 如果还是不行，请把具体问题反馈到邮箱：[xxyybear@gmail.com](mailto:xxyybear@gmail.com)
 
 ---
 
-**Just Type is made for iPad with a hardware keyboard.** On iPhone or Mac, open Just Type IME's own settings page (Settings → "Just Type IME" under Community plugins in the sidebar) and turn on "仅在此设备停用 Just Type" (disable on this device only). It only affects that device. Do **not** turn off the plugin's toggle in the installed-plugins list: with Sync, that toggle can turn Just Type off on your other devices too. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
+**When should you turn Just Type off?** On **Mac**, we recommend turning it off, so Shift doesn't conflict with third-party input methods. On **iPhone or iPad**, turn it off while you use the on-screen keyboard, and turn it back on when you connect a hardware keyboard. To turn it off, open **Settings → Just Type IME → 仅在此设备停用 Just Type** (disable on this device only); you don't need to turn off the plugin in the installed-plugins list. The first launch shows a short guide; open it again any time from **Settings → Just Type IME → 使用说明**.
 
 1. Switch the system keyboard to **English ABC** and Just Type takes over: type Pinyin Chinese or English.
 2. Switch the system keyboard to **Chinese Pinyin** and Just Type steps aside: keys go back to the system IME.

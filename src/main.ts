@@ -423,7 +423,6 @@ class JustTypeSettingTab extends PluginSettingTab {
       render: (setting) => this.plugin.renderDisableSetting(setting)
     }, {
       name: "中英文切换键",
-      desc: "单独按一下这个键（中间不夹别的键）在中文和英文之间切换。命令面板里的「切换中英文 (toggle)」始终可用，也可以在 Obsidian 的快捷键设置里自行绑定。",
       aliases: ["toggle", "Shift", "chinese", "english"],
       control: {
         type: "dropdown",
@@ -467,7 +466,6 @@ class JustTypeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("中英文切换键")
-      .setDesc("单独按一下这个键（中间不夹别的键）在中文和英文之间切换。命令面板里的「切换中英文 (toggle)」始终可用，也可以在 Obsidian 的快捷键设置里自行绑定。")
       .addDropdown((dropdown) => {
         for (const [value, label] of Object.entries(TOGGLE_KEY_LABEL)) {
           dropdown.addOption(value, label);
@@ -531,12 +529,12 @@ class WhatsNewModal extends Modal {
  */
 const DISABLE_HERE_NAME = "仅在此设备停用 Just Type";
 const DISABLE_HERE_LINES = [
-  "如需仅在此设备停用，请使用此开关，无需关闭插件列表中的开关。",
-  "停用后，此设备使用系统输入法，不影响其他设备。Mac 建议停用，避免 Shift 与第三方输入法冲突。",
+  "停用后，此设备使用系统输入法，不影响其他设备。",
+  "Mac 建议停用，避免 Shift 与第三方输入法冲突。",
   "iPhone、iPad 使用屏幕键盘时也建议停用，连接外接键盘时再启用 Just Type。"
 ];
 
-/* 开关下面的说明分三行显示。设置页和使用说明里的示意图共用。 */
+/* 开关下面的说明分三行显示（只在设置页；使用说明里的示意图只画名称和开关）。 */
 function disableHereDesc(): DocumentFragment {
   return createFragment((f) => {
     DISABLE_HERE_LINES.forEach((line, i) => {
@@ -558,24 +556,24 @@ class HelpModal extends Modal {
     super(app);
   }
 
-  /* 适用范围：专为 iPad 外接键盘；iPhone、Mac 上在 Just Type 自己的设置页停用，不要关已安装插件列表里的开关（会同步）。 */
+  /* 什么情况建议停用：Mac 上会和第三方输入法抢 Shift；iPhone、iPad 用屏幕键盘时用不上。停用用 Just Type 自己的开关（只记在本机）。 */
   private renderScope(el: HTMLElement): void {
     const box = el.createDiv({ cls: "just-type-help-scope" });
-    box.createEl("p").createEl("strong", { text: "Just Type 专为 iPad 外接键盘优化。" });
-    const how = box.createEl("p", { text: "在 iPhone 或 Mac 上，请打开 " });
-    how.createEl("strong", { text: "Just Type IME 自己的设置页" });
-    how.append("（设置 → 左侧栏「第三方插件」分组下的「Just Type IME」），在里面打开「");
-    how.createEl("strong", { text: DISABLE_HERE_NAME });
-    how.append("」。只影响这台设备，其他设备照常使用。");
+    box.createEl("p").createEl("strong", { text: "什么情况建议先停用 Just Type 插件？" });
+    const mac = box.createEl("p");
+    mac.createEl("strong", { text: "Mac：" });
+    mac.append("建议停用，避免 Shift 与第三方输入法冲突。");
+    const mobile = box.createEl("p");
+    mobile.createEl("strong", { text: "iPhone、iPad：" });
+    mobile.append("使用屏幕键盘时建议停用，连接外接键盘时再启用 Just Type。");
+    const how = box.createEl("p", { text: "如需停用，请打开 " });
+    how.createEl("strong", { text: `设置 → Just Type IME → ${DISABLE_HERE_NAME}` });
+    how.append("，无需关闭插件列表中的开关。");
     // 示意图：照设置页里那一行画出来（跟随主题，不用截图），只看不点。
     const figure = box.createDiv({ cls: "just-type-help-figure" });
     new Setting(figure)
       .setName(DISABLE_HERE_NAME)
-      .setDesc(disableHereDesc())
       .addToggle((toggle) => toggle.setValue(false));
-    const warn = box.createEl("p", { text: "⚠️ " });
-    warn.createEl("strong", { text: "不要" });
-    warn.append("关闭「第三方插件 → 已安装插件」列表里 Just Type IME 旁边的那个开关。那个开关会随 Obsidian 同步，关掉后，其他设备上的 Just Type 也可能被一起关掉。");
     if (!this.device.showButton) return;
     const button = box.createEl("button", { cls: "just-type-help-disable" });
     const refresh = (): void => {
@@ -615,9 +613,8 @@ class HelpModal extends Modal {
     faq.createEl("li", { text: key
       ? `打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 ${key} 切到中文。`
       : "打中文还是卡：确认系统键盘切到了「英文 ABC」，再用命令「切换中英文 (toggle)」切到中文。" });
-    const last = faq.createEl("li", { text: "还是不行：请发邮件到 " });
+    const last = faq.createEl("li", { text: "如果还是不行，请把具体问题反馈到邮箱：" });
     last.createEl("a", { text: "xxyybear@gmail.com", attr: { href: "mailto:xxyybear@gmail.com" } });
-    last.append("。");
 
     if (this.welcome) el.createEl("p", { cls: "just-type-help-footer", text: "以后可以在 设置 → Just Type IME → 使用说明 再看。" });
     const actions = el.createDiv({ cls: "just-type-diag-actions" });
@@ -876,6 +873,7 @@ export default class JustTypePlugin extends Plugin {
       await this.startInput(false);
     }
     for (const listener of this.deviceListeners) listener();
+    for (const listener of this.dictListeners) listener();
   }
 
   renderDisableSetting(setting: Setting): () => void {
@@ -1291,7 +1289,8 @@ export default class JustTypePlugin extends Plugin {
     });
     const refresh = (): void => {
       const line = dictLine(this.dict?.status(), this.dictContext());
-      setting.settingEl.toggleClass("just-type-hidden", line.normal);
+      // 在此设备停用时没打开词库，不显示这一行（否则会误报「无法保存词库」）。
+      setting.settingEl.toggleClass("just-type-hidden", line.normal || this.disabledHere);
       setting.setDesc(line.text);
       setting.descEl.toggleClass("just-type-dict-warn", line.warn);
       button?.buttonEl.toggleClass("just-type-hidden", !line.action);
