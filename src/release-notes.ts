@@ -9,6 +9,14 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "1.0.2",
+    items: [
+      "使用说明写清楚了什么情况建议停用：Mac 建议停用，避免和第三方输入法抢 Shift；iPhone、iPad 用屏幕键盘时建议停用，接上外接键盘再启用",
+      "设置页更简洁：开关改名为「仅在此设备停用 Just Type」，说明更短；中英文切换键去掉了说明",
+      "修好了停用后设置页误报「这台设备无法保存词库」的问题"
+    ]
+  },
+  {
     version: "1.0.1",
     items: [
       "增加了「在这台设备上停用」的独立设置：iPhone 和 Mac 上不用再去关插件开关，iPad 上的 Just Type 照常工作",

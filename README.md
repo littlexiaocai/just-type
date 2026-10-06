@@ -4,7 +4,17 @@
 
 Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
 
-## 最近更新 · What's new（1.0.1）
+## 最近更新 · What's new（1.0.2）
+
+- **使用说明写清楚了什么情况建议停用**：Mac 建议停用，避免和第三方输入法抢 Shift；iPhone、iPad 用屏幕键盘时建议停用，接上外接键盘再启用
+- **设置页更简洁**：开关改名为「仅在此设备停用 Just Type」，说明更短；中英文切换键去掉了说明
+- **修好了停用后设置页误报「这台设备无法保存词库」的问题**
+
+- **The guide now says when to turn Just Type off**: on Mac, so it doesn't fight third-party input methods over Shift; on iPhone and iPad while you use the on-screen keyboard, turning it back on with a hardware keyboard
+- **Simpler settings**: the switch is now called "仅在此设备停用 Just Type" (disable on this device only) with a shorter description; the toggle-key row no longer has a description
+- **Fixed**: after turning Just Type off on a device, the settings page no longer wrongly says the device can't save the dictionary
+
+### 1.0.1
 
 - **增加了「在这台设备上停用」的独立设置**：iPhone 和 Mac 上不用再去关插件开关，iPad 上的 Just Type 照常工作
 - **修好了 Shift 的问题**：用微信、搜狗等输入法时按 Shift，Just Type 不再跟着切换、乱弹提示

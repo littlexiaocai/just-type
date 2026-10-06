@@ -11,7 +11,7 @@ import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 import { DeviceSettings } from "./device";
 
-const PLUGIN_VERSION = "1.0.1";
+const PLUGIN_VERSION = "1.0.2";
 declare const JT_BUILD_TIME: string;
 const BUILD_TIME = typeof JT_BUILD_TIME !== "undefined" ? JT_BUILD_TIME : "未知";
 const INIT_TIMEOUT_MS = 45000;
