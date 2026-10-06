@@ -1941,7 +1941,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = "1.0.1";
-var BUILD_TIME = true ? "2026/9/28 17:51:49" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/6 21:36:40" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2220,8 +2220,8 @@ var JustTypeSettingTab = class extends import_obsidian3.PluginSettingTab {
       action: () => this.plugin.openHelp()
     }, {
       // 开关只记在这台设备本机（不写进同步的插件设置），用 render 自己画。
-      name: "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type",
-      aliases: ["disable", "device", "\u505C\u7528", "\u5173\u95ED", "\u8FD9\u53F0\u8BBE\u5907", "iPhone", "Mac"],
+      name: DISABLE_HERE_NAME,
+      aliases: ["disable", "device", "\u505C\u7528", "\u5173\u95ED", "\u6B64\u8BBE\u5907", "\u8FD9\u53F0\u8BBE\u5907", "iPhone", "Mac"],
       render: (setting) => this.plugin.renderDisableSetting(setting)
     }, {
       name: "\u4E2D\u82F1\u6587\u5207\u6362\u952E",
@@ -2308,7 +2308,20 @@ var WhatsNewModal = class extends import_obsidian3.Modal {
     this.contentEl.empty();
   }
 };
-var DISABLE_HERE_DESC = "\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF1AJust Type \u4E0D\u63A5\u7BA1\u6309\u952E\u3001\u4E0D\u5F39\u63D0\u793A\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002\u8BF7\u7528\u8FD9\u91CC\u7684\u5F00\u5173\uFF0C\u4E0D\u8981\u5173\u5DF2\u5B89\u88C5\u63D2\u4EF6\u5217\u8868\u91CC\u7684\u90A3\u4E2A\u5F00\u5173\u3002";
+var DISABLE_HERE_NAME = "\u4EC5\u5728\u6B64\u8BBE\u5907\u505C\u7528 Just Type";
+var DISABLE_HERE_LINES = [
+  "\u5982\u9700\u4EC5\u5728\u6B64\u8BBE\u5907\u505C\u7528\uFF0C\u8BF7\u4F7F\u7528\u6B64\u5F00\u5173\uFF0C\u65E0\u9700\u5173\u95ED\u63D2\u4EF6\u5217\u8868\u4E2D\u7684\u5F00\u5173\u3002",
+  "\u505C\u7528\u540E\uFF0C\u6B64\u8BBE\u5907\u4F7F\u7528\u7CFB\u7EDF\u8F93\u5165\u6CD5\uFF0C\u4E0D\u5F71\u54CD\u5176\u4ED6\u8BBE\u5907\u3002Mac \u5EFA\u8BAE\u505C\u7528\uFF0C\u907F\u514D Shift \u4E0E\u7B2C\u4E09\u65B9\u8F93\u5165\u6CD5\u51B2\u7A81\u3002",
+  "iPhone\u3001iPad \u4F7F\u7528\u5C4F\u5E55\u952E\u76D8\u65F6\u4E5F\u5EFA\u8BAE\u505C\u7528\uFF0C\u8FDE\u63A5\u5916\u63A5\u952E\u76D8\u65F6\u518D\u542F\u7528 Just Type\u3002"
+];
+function disableHereDesc() {
+  return createFragment((f) => {
+    DISABLE_HERE_LINES.forEach((line, i) => {
+      if (i > 0) f.createEl("br");
+      f.append(line);
+    });
+  });
+}
 var HelpModal = class extends import_obsidian3.Modal {
   constructor(app, welcome, toggleKey, device) {
     super(app);
@@ -2323,10 +2336,10 @@ var HelpModal = class extends import_obsidian3.Modal {
     const how = box.createEl("p", { text: "\u5728 iPhone \u6216 Mac \u4E0A\uFF0C\u8BF7\u6253\u5F00 " });
     how.createEl("strong", { text: "Just Type IME \u81EA\u5DF1\u7684\u8BBE\u7F6E\u9875" });
     how.append("\uFF08\u8BBE\u7F6E \u2192 \u5DE6\u4FA7\u680F\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6\u300D\u5206\u7EC4\u4E0B\u7684\u300CJust Type IME\u300D\uFF09\uFF0C\u5728\u91CC\u9762\u6253\u5F00\u300C");
-    how.createEl("strong", { text: "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" });
+    how.createEl("strong", { text: DISABLE_HERE_NAME });
     how.append("\u300D\u3002\u53EA\u5F71\u54CD\u8FD9\u53F0\u8BBE\u5907\uFF0C\u5176\u4ED6\u8BBE\u5907\u7167\u5E38\u4F7F\u7528\u3002");
     const figure = box.createDiv({ cls: "just-type-help-figure" });
-    new import_obsidian3.Setting(figure).setName("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type").setDesc(DISABLE_HERE_DESC).addToggle((toggle) => toggle.setValue(false));
+    new import_obsidian3.Setting(figure).setName(DISABLE_HERE_NAME).setDesc(disableHereDesc()).addToggle((toggle) => toggle.setValue(false));
     const warn = box.createEl("p", { text: "\u26A0\uFE0F " });
     warn.createEl("strong", { text: "\u4E0D\u8981" });
     warn.append("\u5173\u95ED\u300C\u7B2C\u4E09\u65B9\u63D2\u4EF6 \u2192 \u5DF2\u5B89\u88C5\u63D2\u4EF6\u300D\u5217\u8868\u91CC Just Type IME \u65C1\u8FB9\u7684\u90A3\u4E2A\u5F00\u5173\u3002\u90A3\u4E2A\u5F00\u5173\u4F1A\u968F Obsidian \u540C\u6B65\uFF0C\u5173\u6389\u540E\uFF0C\u5176\u4ED6\u8BBE\u5907\u4E0A\u7684 Just Type \u4E5F\u53EF\u80FD\u88AB\u4E00\u8D77\u5173\u6389\u3002");
@@ -2334,7 +2347,7 @@ var HelpModal = class extends import_obsidian3.Modal {
     const button = box.createEl("button", { cls: "just-type-help-disable" });
     const refresh = () => {
       const off = this.device.isDisabled();
-      button.setText(off ? "\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" : "\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528");
+      button.setText(off ? "\u5DF2\u5728\u6B64\u8BBE\u5907\u505C\u7528" : "\u4EC5\u5728\u6B64\u8BBE\u5907\u505C\u7528");
       button.disabled = off;
     };
     refresh();
@@ -2577,7 +2590,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     if (on) {
       this.stopInput();
       this.log("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type");
-      new import_obsidian3.Notice("\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type\u3002\u5176\u4ED6\u8BBE\u5907\u4E0D\u53D7\u5F71\u54CD\uFF1B\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u8FD9\u4E2A\u5F00\u5173\u3002", 8e3);
+      new import_obsidian3.Notice(`\u5DF2\u5728\u6B64\u8BBE\u5907\u505C\u7528 Just Type\u3002\u5176\u4ED6\u8BBE\u5907\u4E0D\u53D7\u5F71\u54CD\uFF1B\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u300C${DISABLE_HERE_NAME}\u300D\u3002`, 8e3);
     } else {
       this.log("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u6062\u590D Just Type");
       await this.startInput(false);
@@ -2585,8 +2598,8 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     for (const listener of this.deviceListeners) listener();
   }
   renderDisableSetting(setting) {
-    setting.setName("\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528 Just Type");
-    setting.setDesc(DISABLE_HERE_DESC);
+    setting.setName(DISABLE_HERE_NAME);
+    setting.setDesc(disableHereDesc());
     let toggle;
     setting.addToggle((t) => {
       toggle = t;
@@ -3405,7 +3418,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
   /** 停用时点状态栏、功能区图标或用切换命令：告诉用户在哪里恢复。 */
   noticeIfDisabled() {
     if (!this.disabledHere) return false;
-    new import_obsidian3.Notice("Just Type \u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528\u3002\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u300C\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528\u300D\u3002", 6e3);
+    new import_obsidian3.Notice(`Just Type \u5DF2\u5728\u6B64\u8BBE\u5907\u505C\u7528\u3002\u8981\u6062\u590D\uFF0C\u56DE\u5230 Just Type IME \u7684\u8BBE\u7F6E\u9875\u5173\u6389\u300C${DISABLE_HERE_NAME}\u300D\u3002`, 6e3);
     return true;
   }
   setMode(next) {
@@ -3428,7 +3441,7 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     }
     if (this.ribbon) {
       this.ribbon.toggleClass("is-enabled", active);
-      this.ribbon.setAttribute("aria-label", this.disabledHere ? "Just Type\uFF1A\u5DF2\u5728\u8FD9\u53F0\u8BBE\u5907\u4E0A\u505C\u7528" : `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
+      this.ribbon.setAttribute("aria-label", this.disabledHere ? "Just Type\uFF1A\u5DF2\u5728\u6B64\u8BBE\u5907\u505C\u7528" : `Just Type\uFF1A${MODE_NOTICE[this.mode]}`);
       (0, import_obsidian3.setIcon)(this.ribbon, this.mode === "emoji" ? "smile" : this.mode === "chinese" && this.ready ? "languages" : "type");
     }
   }
