@@ -4,7 +4,15 @@
 
 Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
 
-## 最近更新 · What's new（1.0.2）
+## 最近更新 · What's new（1.0.3）
+
+- **安装更可靠**：网络不稳时，Obsidian 偶尔会漏下载插件的样式文件，候选栏就会跑到屏幕左下角。现在插件发现后会自动补好，不用重装
+- **更新没装完整时会提醒你**：如果更新时程序文件没下载下来，插件会恢复到原来的版本，并提示你再更新一次，不会再出现「显示是新版、用的还是旧版」的情况
+
+- **More reliable install**: on a flaky network Obsidian sometimes skips the plugin's stylesheet, which pushes the candidate bar to the bottom-left of the screen. Just Type now restores it automatically, with no reinstall needed
+- **Tells you when an update didn't finish**: if the program file failed to download during an update, Just Type goes back to the version you were running and asks you to update again, so it never shows a new version while still running the old one
+
+### 1.0.2
 
 - **使用说明写清楚了什么情况建议停用**：Mac 建议停用，避免和第三方输入法抢 Shift；iPhone、iPad 用屏幕键盘时建议停用，接上外接键盘再启用
 - **设置页更简洁**：开关改名为「仅在此设备停用 Just Type」，说明更短；中英文切换键去掉了说明

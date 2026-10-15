@@ -92,7 +92,7 @@ var styles_default = ".just-type-panel {\n  position: fixed;\n  z-index: 10000;\
 var manifest_default = {
   id: "just-type",
   name: "Just Type IME",
-  version: "1.0.2",
+  version: "1.0.3",
   minAppVersion: "1.5.0",
   description: "Type Chinese directly in the editor with the RIME engine, bypassing the system input method.",
   author: "littlexiaocai",
@@ -1873,6 +1873,13 @@ var UpdateChecker = class {
 // src/release-notes.ts
 var RELEASE_NOTES = [
   {
+    version: "1.0.3",
+    items: [
+      "\u5B89\u88C5\u66F4\u53EF\u9760\uFF1A\u7F51\u7EDC\u4E0D\u7A33\u65F6\uFF0CObsidian \u5076\u5C14\u4F1A\u6F0F\u4E0B\u8F7D\u63D2\u4EF6\u7684\u6837\u5F0F\u6587\u4EF6\uFF0C\u5019\u9009\u680F\u5C31\u4F1A\u8DD1\u5230\u5C4F\u5E55\u5DE6\u4E0B\u89D2\u3002\u73B0\u5728\u63D2\u4EF6\u53D1\u73B0\u540E\u4F1A\u81EA\u52A8\u8865\u597D\uFF0C\u4E0D\u7528\u91CD\u88C5",
+      "\u66F4\u65B0\u6CA1\u88C5\u5B8C\u6574\u65F6\u4F1A\u63D0\u9192\u4F60\uFF1A\u5982\u679C\u66F4\u65B0\u65F6\u7A0B\u5E8F\u6587\u4EF6\u6CA1\u4E0B\u8F7D\u4E0B\u6765\uFF0C\u63D2\u4EF6\u4F1A\u6062\u590D\u5230\u539F\u6765\u7684\u7248\u672C\uFF0C\u5E76\u63D0\u793A\u4F60\u518D\u66F4\u65B0\u4E00\u6B21\uFF0C\u4E0D\u4F1A\u518D\u51FA\u73B0\u300C\u663E\u793A\u662F\u65B0\u7248\u3001\u7528\u7684\u8FD8\u662F\u65E7\u7248\u300D\u7684\u60C5\u51B5"
+    ]
+  },
+  {
     version: "1.0.2",
     items: [
       "\u4F7F\u7528\u8BF4\u660E\u5199\u6E05\u695A\u4E86\u4EC0\u4E48\u60C5\u51B5\u5EFA\u8BAE\u505C\u7528\uFF1AMac \u5EFA\u8BAE\u505C\u7528\uFF0C\u907F\u514D\u548C\u7B2C\u4E09\u65B9\u8F93\u5165\u6CD5\u62A2 Shift\uFF1BiPhone\u3001iPad \u7528\u5C4F\u5E55\u952E\u76D8\u65F6\u5EFA\u8BAE\u505C\u7528\uFF0C\u63A5\u4E0A\u5916\u63A5\u952E\u76D8\u518D\u542F\u7528",
@@ -1964,7 +1971,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/15 20:36:19" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/15 20:47:07" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";

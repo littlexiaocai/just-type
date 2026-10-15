@@ -9,6 +9,13 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "1.0.3",
+    items: [
+      "安装更可靠：网络不稳时，Obsidian 偶尔会漏下载插件的样式文件，候选栏就会跑到屏幕左下角。现在插件发现后会自动补好，不用重装",
+      "更新没装完整时会提醒你：如果更新时程序文件没下载下来，插件会恢复到原来的版本，并提示你再更新一次，不会再出现「显示是新版、用的还是旧版」的情况"
+    ]
+  },
+  {
     version: "1.0.2",
     items: [
       "使用说明写清楚了什么情况建议停用：Mac 建议停用，避免和第三方输入法抢 Shift；iPhone、iPad 用屏幕键盘时建议停用，接上外接键盘再启用",
