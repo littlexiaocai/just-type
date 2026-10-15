@@ -1,7 +1,9 @@
-import { App, ButtonComponent, Component, MarkdownView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon, ToggleComponent } from "obsidian";
+import { App, ButtonComponent, Component, MarkdownView, Menu, Modal, normalizePath, Notice, Platform, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, setIcon, ToggleComponent } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import { INLINE_PREEDIT_CLASS, inlinePreeditEffect, inlinePreeditExtension } from "./inline-preedit";
 import workerSource from "./vendor/my-rime-worker.txt";
+import STYLES_CSS from "../styles.css";
+import BUNDLED_MANIFEST from "../manifest.json";
 import { assetSummary, embeddedDictIdentity, loadLocalAssets, type DictIdentity, type LocalAssets } from "./assets";
 import { CATALOG, DEFAULT_CONFIG, DictManager, USING_DEV_URLS, type DictCatalog, type DictStatus } from "./dict/manager";
 import { DictStore } from "./dict/store";
@@ -11,7 +13,8 @@ import { compareVersions, PLUGIN_PAGE_URI, UpdateChecker, type LatestInfo } from
 import { RELEASE_NOTES, type ReleaseNote } from "./release-notes";
 import { DeviceSettings } from "./device";
 
-const PLUGIN_VERSION = "1.0.2";
+/* 版本号直接取打包进来的 manifest.json，程序和清单不会对不上；发版只改 manifest.json 等文件即可。 */
+const PLUGIN_VERSION: string = BUNDLED_MANIFEST.version;
 declare const JT_BUILD_TIME: string;
 const BUILD_TIME = typeof JT_BUILD_TIME !== "undefined" ? JT_BUILD_TIME : "未知";
 const INIT_TIMEOUT_MS = 45000;
@@ -723,6 +726,9 @@ export default class JustTypePlugin extends Plugin {
   private skipCounts: Partial<Record<SkipReason, number>> = {};
   private lastKeyNote = "(尚未按键)";
   private eventTrace: string[] = [];
+  /** 安装完整性自检的结果，写进诊断报告。 */
+  private manifestCheck = "未检查";
+  private styleCheck = "未检查";
   private eventCounts: Record<string, number> = {};
   private pendingTrace = -1;
   private toggleArmed = false;
@@ -746,6 +752,7 @@ export default class JustTypePlugin extends Plugin {
     this.device = new DeviceSettings(this.app);
     this.addSettingTab(new JustTypeSettingTab(this.app, this));
     this.log(`插件 ${PLUGIN_VERSION} 载入${this.device.disabled ? "（这台设备上已停用）" : ""}`);
+    void this.checkInstall();
 
     // 新版本提醒不依赖引擎：引擎加载失败的用户更需要知道有新版本。
     this.updates = new UpdateChecker(this.app, PLUGIN_VERSION, (message) => this.log(message));
@@ -782,6 +789,88 @@ export default class JustTypePlugin extends Plugin {
 
   private get disabledHere(): boolean {
     return this.device?.disabled ?? false;
+  }
+
+  /*
+   * 安装完整性自检，每次启动做一次，不联网。
+   * Obsidian 安装、更新插件时依次下载 manifest.json、main.js、styles.css：manifest.json 失败会明确报错、
+   * 什么都不改；后两个失败只记一行日志，照样提示安装成功（国内访问 GitHub 不稳时会遇到）。能跑到这里说明
+   * main.js 在，剩下两种情况由这里补救：
+   * - 更新时 main.js 没下载下来：manifest.json 已是新版本号，跑的却是旧程序，Obsidian 也不再提示更新。
+   *   把 manifest.json 改回和正在运行的程序一致，「更新」按钮才会重新出现。
+   * - styles.css 没下载下来或不是这一版：用 main.js 里带的那份写回。
+   * 写回的永远是和正在运行的程序配套的那份，所以即使同步只到了一半，下次启动也会自然一致。
+   */
+  private async checkInstall(): Promise<void> {
+    await this.ensureManifest();
+    await this.ensureStyles();
+  }
+
+  private async ensureManifest(): Promise<void> {
+    const dir = this.manifest.dir;
+    const installed = this.manifest.version;
+    if (!dir) {
+      this.manifestCheck = `跳过（不知道插件文件夹）`;
+      return;
+    }
+    if (installed === PLUGIN_VERSION) {
+      this.manifestCheck = `一致（${PLUGIN_VERSION}）`;
+      return;
+    }
+    try {
+      await this.app.vault.adapter.write(normalizePath(`${dir}/manifest.json`), `${JSON.stringify(BUNDLED_MANIFEST, null, 2)}\n`);
+      // Obsidian 查更新时比的是内存里这份清单，和插件拿到的是同一个对象。
+      this.manifest.version = PLUGIN_VERSION;
+      const incomplete = compareVersions(installed, PLUGIN_VERSION) > 0;
+      this.manifestCheck = incomplete
+        ? `清单 ${installed}、程序 ${PLUGIN_VERSION}（更新没下载完整），已改回 ${PLUGIN_VERSION}`
+        : `清单 ${installed}、程序 ${PLUGIN_VERSION}，已改成 ${PLUGIN_VERSION}`;
+      this.log(`安装完整性：${this.manifestCheck}`);
+      if (incomplete && !this.disabledHere) {
+        new Notice(`Just Type 这次更新没下载完整，已恢复到 ${PLUGIN_VERSION}。请到 设置 → 第三方插件 里再更新一次。`, 12000);
+      }
+    } catch (error) {
+      this.manifestCheck = `清单 ${installed}、程序 ${PLUGIN_VERSION}，改回失败：${this.errorMessage(error)}`;
+      this.log(`安装完整性：${this.manifestCheck}`);
+    }
+  }
+
+  /*
+   * 样式文件缺了，候选栏会掉到屏幕左下角。写回插件文件夹后，再让 Obsidian 重新加载插件样式，当场生效。
+   * 审核规则不允许插件自己往页面里插 <style>，所以写回文件、交给 Obsidian 自己加载。
+   */
+  private async ensureStyles(): Promise<void> {
+    const dir = this.manifest.dir;
+    if (!dir) {
+      this.styleCheck = "跳过（不知道插件文件夹）";
+      return;
+    }
+    const path = normalizePath(`${dir}/styles.css`);
+    const adapter = this.app.vault.adapter;
+    const normalize = (text: string): string => text.replace(/\r\n/g, "\n");
+    try {
+      const current = (await adapter.exists(path)) ? normalize(await adapter.read(path)) : null;
+      if (current === normalize(STYLES_CSS)) {
+        this.styleCheck = "正常";
+        return;
+      }
+      const reason = current === null ? "缺失" : "和这一版不一致";
+      await adapter.write(path, STYLES_CSS);
+      // Obsidian 启动插件时就是用 loadCSS 读 styles.css 的（不在公开 API 里）；没有它就只能等下次打开。
+      const loadCSS = (this as unknown as { loadCSS?: () => Promise<void> }).loadCSS;
+      const live = typeof loadCSS === "function";
+      if (live) await loadCSS.call(this);
+      this.styleCheck = live ? `启动时${reason}，已自动补好` : `启动时${reason}，已写回，重新打开 Obsidian 后生效`;
+      this.log(`样式文件${reason}，已用插件自带的那份写回${live ? "并重新加载" : ""}`);
+      if (!this.disabledHere) {
+        new Notice(live
+          ? "Just Type 安装时样式文件没下载完整，已自动补好。"
+          : "Just Type 安装时样式文件没下载完整，已自动补好，重新打开 Obsidian 后生效。", 8000);
+      }
+    } catch (error) {
+      this.styleCheck = `补写失败：${this.errorMessage(error)}`;
+      this.log(`样式文件自检失败：${this.errorMessage(error)}`);
+    }
   }
 
   /**
@@ -1551,6 +1640,9 @@ export default class JustTypePlugin extends Plugin {
       "Just Type · 诊断报告",
       `生成时间：${new Date().toLocaleString()}`,
       `插件版本：${PLUGIN_VERSION}（构建于 ${BUILD_TIME}）`,
+      "安装完整性：",
+      `  版本号：${this.manifestCheck}`,
+      `  样式文件：${this.styleCheck}`,
       this.environmentLine(),
       "",
       "--- 内嵌资源（引擎与基础词库，运行时不下载）---",

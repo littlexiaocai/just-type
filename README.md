@@ -71,6 +71,7 @@ Three-character words, four-character idioms and everyday phrases come up right 
 **遇到问题**
 
 - 打中文还是卡：确认系统键盘切到了「英文 ABC」，再单独按一下 Shift 切到中文
+- 启用时提示加载失败：请卸载后重新安装，网络不稳时可以先开代理
 - 如果还是不行，请把具体问题反馈到邮箱：[xxyybear@gmail.com](mailto:xxyybear@gmail.com)
 
 ---
