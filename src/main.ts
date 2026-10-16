@@ -288,6 +288,12 @@ class RimeWorkerClient {
   call<T>(name: string, ...args: unknown[]): Promise<T> {
     if (this.fatal) return Promise.reject(this.fatal);
     const run = () => new Promise<T>((resolve, reject) => {
+      // 排在队里的调用轮到时引擎可能已经停了：直接失败。否则会发给已终止的 Worker、永远等不到回复，
+      // 挂着的回调会把整个旧插件（连同几十 MB 的词库数据）留在内存里（1.0.3 iPad 补测发现）。
+      if (this.fatal) {
+        reject(this.fatal);
+        return;
+      }
       this.pending = {
         resolve: (value) => resolve(value as T),
         reject
@@ -808,7 +814,7 @@ export default class JustTypePlugin extends Plugin {
 
   private async ensureManifest(): Promise<void> {
     const dir = this.manifest.dir;
-    const installed = this.manifest.version;
+    const installed: unknown = this.manifest.version;
     if (!dir) {
       this.manifestCheck = `跳过（不知道插件文件夹）`;
       return;
@@ -817,21 +823,23 @@ export default class JustTypePlugin extends Plugin {
       this.manifestCheck = `一致（${PLUGIN_VERSION}）`;
       return;
     }
+    // 清单里的版本号缺失或不像版本号（文件本身下坏了）：悄悄改好，不当成「更新没下载完整」。
+    const valid = typeof installed === "string" && /^\d+(\.\d+)*$/.test(installed);
+    const label = valid ? installed : "（版本号无效）";
+    const incomplete = valid && compareVersions(installed, PLUGIN_VERSION) > 0;
+    // Obsidian 查更新时比的是内存里这份清单（和插件拿到的是同一个对象）。先改内存：
+    // 就算下面写文件失败，这次打开期间「更新」按钮也会出现，用户照样能再更新一次。
+    this.manifest.version = PLUGIN_VERSION;
+    const head = `清单 ${label}、程序 ${PLUGIN_VERSION}${incomplete ? "（更新没下载完整）" : ""}`;
     try {
       await this.app.vault.adapter.write(normalizePath(`${dir}/manifest.json`), `${JSON.stringify(BUNDLED_MANIFEST, null, 2)}\n`);
-      // Obsidian 查更新时比的是内存里这份清单，和插件拿到的是同一个对象。
-      this.manifest.version = PLUGIN_VERSION;
-      const incomplete = compareVersions(installed, PLUGIN_VERSION) > 0;
-      this.manifestCheck = incomplete
-        ? `清单 ${installed}、程序 ${PLUGIN_VERSION}（更新没下载完整），已改回 ${PLUGIN_VERSION}`
-        : `清单 ${installed}、程序 ${PLUGIN_VERSION}，已改成 ${PLUGIN_VERSION}`;
-      this.log(`安装完整性：${this.manifestCheck}`);
-      if (incomplete && !this.disabledHere) {
-        new Notice(`Just Type 这次更新没下载完整，已恢复到 ${PLUGIN_VERSION}。请到 设置 → 第三方插件 里再更新一次。`, 12000);
-      }
+      this.manifestCheck = `${head}，已${incomplete ? "改回" : "改成"} ${PLUGIN_VERSION}`;
     } catch (error) {
-      this.manifestCheck = `清单 ${installed}、程序 ${PLUGIN_VERSION}，改回失败：${this.errorMessage(error)}`;
-      this.log(`安装完整性：${this.manifestCheck}`);
+      this.manifestCheck = `${head}，文件没改成（${this.errorMessage(error)}），这次打开期间已按 ${PLUGIN_VERSION} 处理，下次启动再试`;
+    }
+    this.log(`安装完整性：${this.manifestCheck}`);
+    if (incomplete && !this.disabledHere) {
+      new Notice(`Just Type 这次更新没下载完整，已恢复到 ${PLUGIN_VERSION}。请到 设置 → 第三方插件 里再更新一次。`, 12000);
     }
   }
 
@@ -868,8 +876,12 @@ export default class JustTypePlugin extends Plugin {
           : "Just Type 安装时样式文件没下载完整，已自动补好，重新打开 Obsidian 后生效。", 8000);
       }
     } catch (error) {
+      // 每次启动都会再检查一遍，所以先请用户等下次打开；还不行再重装。
       this.styleCheck = `补写失败：${this.errorMessage(error)}`;
       this.log(`样式文件自检失败：${this.errorMessage(error)}`);
+      if (!this.disabledHere) {
+        new Notice("Just Type 的样式文件没下载完整，自动修复也没成功，候选栏可能显示在屏幕左下角。下次打开 Obsidian 会再试一次；如果还是这样，请到 设置 → 第三方插件 里卸载 Just Type IME 后重新安装。", 15000);
+      }
     }
   }
 

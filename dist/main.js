@@ -1971,7 +1971,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/15 20:47:07" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/16 11:57:28" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2162,6 +2162,10 @@ var RimeWorkerClient = class {
   call(name, ...args) {
     if (this.fatal) return Promise.reject(this.fatal);
     const run = () => new Promise((resolve, reject) => {
+      if (this.fatal) {
+        reject(this.fatal);
+        return;
+      }
       this.pending = {
         resolve: (value) => resolve(value),
         reject
@@ -2569,19 +2573,21 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
       this.manifestCheck = `\u4E00\u81F4\uFF08${PLUGIN_VERSION}\uFF09`;
       return;
     }
+    const valid = typeof installed === "string" && /^\d+(\.\d+)*$/.test(installed);
+    const label = valid ? installed : "\uFF08\u7248\u672C\u53F7\u65E0\u6548\uFF09";
+    const incomplete = valid && compareVersions(installed, PLUGIN_VERSION) > 0;
+    this.manifest.version = PLUGIN_VERSION;
+    const head = `\u6E05\u5355 ${label}\u3001\u7A0B\u5E8F ${PLUGIN_VERSION}${incomplete ? "\uFF08\u66F4\u65B0\u6CA1\u4E0B\u8F7D\u5B8C\u6574\uFF09" : ""}`;
     try {
       await this.app.vault.adapter.write((0, import_obsidian3.normalizePath)(`${dir}/manifest.json`), `${JSON.stringify(manifest_default, null, 2)}
 `);
-      this.manifest.version = PLUGIN_VERSION;
-      const incomplete = compareVersions(installed, PLUGIN_VERSION) > 0;
-      this.manifestCheck = incomplete ? `\u6E05\u5355 ${installed}\u3001\u7A0B\u5E8F ${PLUGIN_VERSION}\uFF08\u66F4\u65B0\u6CA1\u4E0B\u8F7D\u5B8C\u6574\uFF09\uFF0C\u5DF2\u6539\u56DE ${PLUGIN_VERSION}` : `\u6E05\u5355 ${installed}\u3001\u7A0B\u5E8F ${PLUGIN_VERSION}\uFF0C\u5DF2\u6539\u6210 ${PLUGIN_VERSION}`;
-      this.log(`\u5B89\u88C5\u5B8C\u6574\u6027\uFF1A${this.manifestCheck}`);
-      if (incomplete && !this.disabledHere) {
-        new import_obsidian3.Notice(`Just Type \u8FD9\u6B21\u66F4\u65B0\u6CA1\u4E0B\u8F7D\u5B8C\u6574\uFF0C\u5DF2\u6062\u590D\u5230 ${PLUGIN_VERSION}\u3002\u8BF7\u5230 \u8BBE\u7F6E \u2192 \u7B2C\u4E09\u65B9\u63D2\u4EF6 \u91CC\u518D\u66F4\u65B0\u4E00\u6B21\u3002`, 12e3);
-      }
+      this.manifestCheck = `${head}\uFF0C\u5DF2${incomplete ? "\u6539\u56DE" : "\u6539\u6210"} ${PLUGIN_VERSION}`;
     } catch (error) {
-      this.manifestCheck = `\u6E05\u5355 ${installed}\u3001\u7A0B\u5E8F ${PLUGIN_VERSION}\uFF0C\u6539\u56DE\u5931\u8D25\uFF1A${this.errorMessage(error)}`;
-      this.log(`\u5B89\u88C5\u5B8C\u6574\u6027\uFF1A${this.manifestCheck}`);
+      this.manifestCheck = `${head}\uFF0C\u6587\u4EF6\u6CA1\u6539\u6210\uFF08${this.errorMessage(error)}\uFF09\uFF0C\u8FD9\u6B21\u6253\u5F00\u671F\u95F4\u5DF2\u6309 ${PLUGIN_VERSION} \u5904\u7406\uFF0C\u4E0B\u6B21\u542F\u52A8\u518D\u8BD5`;
+    }
+    this.log(`\u5B89\u88C5\u5B8C\u6574\u6027\uFF1A${this.manifestCheck}`);
+    if (incomplete && !this.disabledHere) {
+      new import_obsidian3.Notice(`Just Type \u8FD9\u6B21\u66F4\u65B0\u6CA1\u4E0B\u8F7D\u5B8C\u6574\uFF0C\u5DF2\u6062\u590D\u5230 ${PLUGIN_VERSION}\u3002\u8BF7\u5230 \u8BBE\u7F6E \u2192 \u7B2C\u4E09\u65B9\u63D2\u4EF6 \u91CC\u518D\u66F4\u65B0\u4E00\u6B21\u3002`, 12e3);
     }
   }
   /*
@@ -2616,6 +2622,9 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     } catch (error) {
       this.styleCheck = `\u8865\u5199\u5931\u8D25\uFF1A${this.errorMessage(error)}`;
       this.log(`\u6837\u5F0F\u6587\u4EF6\u81EA\u68C0\u5931\u8D25\uFF1A${this.errorMessage(error)}`);
+      if (!this.disabledHere) {
+        new import_obsidian3.Notice("Just Type \u7684\u6837\u5F0F\u6587\u4EF6\u6CA1\u4E0B\u8F7D\u5B8C\u6574\uFF0C\u81EA\u52A8\u4FEE\u590D\u4E5F\u6CA1\u6210\u529F\uFF0C\u5019\u9009\u680F\u53EF\u80FD\u663E\u793A\u5728\u5C4F\u5E55\u5DE6\u4E0B\u89D2\u3002\u4E0B\u6B21\u6253\u5F00 Obsidian \u4F1A\u518D\u8BD5\u4E00\u6B21\uFF1B\u5982\u679C\u8FD8\u662F\u8FD9\u6837\uFF0C\u8BF7\u5230 \u8BBE\u7F6E \u2192 \u7B2C\u4E09\u65B9\u63D2\u4EF6 \u91CC\u5378\u8F7D Just Type IME \u540E\u91CD\u65B0\u5B89\u88C5\u3002", 15e3);
+      }
     }
   }
   /**
