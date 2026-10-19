@@ -71,6 +71,17 @@ Three-character words, four-character idioms and everyday phrases come up right 
 4. **选词**：空格选第一个，数字键选第几个，也可以用手指点。
 5. **表情**：仍用键盘上的 🌐 地球键调出。能否调出取决于键盘列表里是否启用了「表情符号」，以及 设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号。
 
+**中文标点**：中文模式下按键直接出中文标点，和微信输入法一样；要打英文符号（比如双链的 `[ ]`、表格的 `|`），先按 Shift 切到英文。
+
+| 中文标点 | 按键 | 中文标点 | 按键 |
+|---|---|---|---|
+| ，。、 | `,` `.` `/` 或 `\` | 《》 | `<` `>` |
+| ？！：； | `?` `!` `:` `;` | 【】 | `[` `]` |
+| “” ‘’ | `"` `'`（自动成对） | 「」 | `{` `}` |
+| （） | `(` `)` | ·（间隔号） | `` ` `` |
+| …… | `^` | ｜（全角竖线） | `\|` |
+| —— | `_` | ～ ￥ | `~` `$` |
+
 系统键盘在中文拼音时，Shift 归系统输入法（比如微信、搜狗用它切中英），Just Type 不会跟着切换。接手和退出时，Just Type 都会弹出提示：
 
 - 接手时：「Just Type 已就绪——按 Shift 在中英文之间切换」
@@ -91,6 +102,8 @@ Three-character words, four-character idioms and everyday phrases come up right 
 3. Tap **Shift** on its own to switch Chinese and English inside Just Type, without touching the system keyboard. You can change the key to Control / Option / Command in plugin settings.
 4. **Pick a candidate** with Space (the first one), a number key, or a tap.
 5. **Emoji** still uses the 🌐 globe key. It depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
+
+**Chinese punctuation**: in Chinese mode the punctuation keys type Chinese punctuation directly, the same as WeChat Input: ，。、？！：； “” ‘’ （） 《》 【】 「」 ……  ——  ·  ｜ ～ ￥. Switch to English with Shift when you need ASCII symbols for Markdown, such as `[[ ]]` or table `|`.
 
 While the system keyboard is on Chinese Pinyin, Shift belongs to the system IME and Just Type does not toggle. Just Type shows a notice both when it takes over and when it steps aside.
 
