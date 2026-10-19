@@ -2022,7 +2022,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/19 20:58:15" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/19 22:03:48" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2153,49 +2153,48 @@ function patchWorkerSource(source) {
   return patched;
 }
 var TAP_SLOP_PX = 10;
-var TAP_DEDUPE_MS = 400;
 function bindTap(button, onTap) {
-  let start;
-  let pointerStart;
-  let firedAt = -Infinity;
-  const fire = () => {
-    const now = performance.now();
-    if (now - firedAt < TAP_DEDUPE_MS) return;
-    firedAt = now;
-    onTap();
+  let gesture;
+  const begin = (x, y) => {
+    gesture ?? (gesture = { x, y, cancelled: false });
   };
-  const moved = (from, x, y) => !from || Math.hypot(x - from.x, y - from.y) > TAP_SLOP_PX;
-  const touchOf = (list, id) => Array.from(list).find((t) => t.identifier === id);
+  const track = (x, y) => {
+    if (gesture && Math.hypot(x - gesture.x, y - gesture.y) > TAP_SLOP_PX) gesture.cancelled = true;
+  };
+  const finish = (x, y) => {
+    const g = gesture;
+    gesture = void 0;
+    if (!g) return;
+    if (!g.cancelled && Math.hypot(x - g.x, y - g.y) <= TAP_SLOP_PX) onTap();
+  };
+  const cancel = () => {
+    if (gesture) gesture.cancelled = true;
+  };
   button.addEventListener("touchstart", (event) => {
     event.preventDefault();
     const t = event.changedTouches[0];
-    start = t ? { x: t.clientX, y: t.clientY, id: t.identifier } : void 0;
+    if (t) begin(t.clientX, t.clientY);
   }, { passive: false });
   button.addEventListener("touchmove", (event) => {
-    const t = start ? touchOf(event.changedTouches, start.id) : void 0;
-    if (t && moved(start, t.clientX, t.clientY)) start = void 0;
+    const t = event.changedTouches[0];
+    if (t) track(t.clientX, t.clientY);
   }, { passive: true });
   button.addEventListener("touchend", (event) => {
-    const t = start ? touchOf(event.changedTouches, start.id) : void 0;
-    const ok = t !== void 0 && !moved(start, t.clientX, t.clientY);
-    start = void 0;
-    if (ok) fire();
+    const t = event.changedTouches[0];
+    if (t) finish(t.clientX, t.clientY);
+    else gesture = void 0;
   });
-  button.addEventListener("touchcancel", () => {
-    start = void 0;
-  });
+  button.addEventListener("touchcancel", cancel);
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    pointerStart = { x: event.clientX, y: event.clientY };
+    begin(event.clientX, event.clientY);
   });
+  button.addEventListener("pointermove", (event) => track(event.clientX, event.clientY));
   button.addEventListener("pointerup", (event) => {
-    const ok = event.button === 0 && !(pointerStart && moved(pointerStart, event.clientX, event.clientY));
-    pointerStart = void 0;
-    if (ok) fire();
+    if (event.button === 0) finish(event.clientX, event.clientY);
+    else gesture = void 0;
   });
-  button.addEventListener("pointercancel", () => {
-    pointerStart = void 0;
-  });
+  button.addEventListener("pointercancel", cancel);
 }
 function isSystemImeComposing(event) {
   return event.isComposing || event.keyCode === 229;

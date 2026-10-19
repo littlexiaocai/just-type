@@ -209,55 +209,60 @@ function patchWorkerSource(source: string): string {
  * 在 touchstart 上 preventDefault 才能让焦点留在原处；代价是系统不再合成 click，所以改在抬起时选词。
  */
 /*
- * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统会把这一下当成
- * 拖动光标的手势接走：pointerdown 到了，pointerup 永远不来，首选点不上（1.0.4 候选版 iPad 复测 P1）。
- * 这时 touchend 照样会到，所以 touchend 和 pointerup 谁先到算谁；同一个按钮 400ms 内只算一次，
- * 手指移动超过 10px（想滑动或移出按钮）不算点。
+ * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统可能把这一下当成
+ * 拖动光标的手势接走：pointerdown 到了，pointerup 不来，首选点不上（1.0.4 候选版 iPad 复测 P1）。
+ * 这时 touchend 照样会到。所以把 pointer 和 touch 两路看成同一次手势：
+ * - 按下（pointerdown 或 touchstart，谁先到）开始一次手势，记下起点；
+ * - 中途任一路移动超过 10px，这次手势就作废，滑回原处也不恢复（第三轮复测：滑开再滑回仍会选词）；
+ * - 任一路取消（pointercancel、touchcancel）也作废；
+ * - 第一个结束信号（pointerup 或 touchend）结束手势，没作废就算点了一下；后到的另一路结束信号不再算；
+ * - 没有按下记录的结束信号不算点。
  */
 const TAP_SLOP_PX = 10;
-const TAP_DEDUPE_MS = 400;
 
 function bindTap(button: HTMLElement, onTap: () => void): void {
-  let start: { x: number; y: number; id: number } | undefined;
-  let pointerStart: { x: number; y: number } | undefined;
-  let firedAt = -Infinity;
-  const fire = (): void => {
-    const now = performance.now();
-    if (now - firedAt < TAP_DEDUPE_MS) return;
-    firedAt = now;
-    onTap();
+  let gesture: { x: number; y: number; cancelled: boolean } | undefined;
+  const begin = (x: number, y: number): void => {
+    gesture ??= { x, y, cancelled: false };
   };
-  const moved = (from: { x: number; y: number } | undefined, x: number, y: number): boolean =>
-    !from || Math.hypot(x - from.x, y - from.y) > TAP_SLOP_PX;
-  const touchOf = (list: TouchList, id: number): Touch | undefined => Array.from(list).find((t) => t.identifier === id);
+  const track = (x: number, y: number): void => {
+    if (gesture && Math.hypot(x - gesture.x, y - gesture.y) > TAP_SLOP_PX) gesture.cancelled = true;
+  };
+  const finish = (x: number, y: number): void => {
+    const g = gesture;
+    gesture = undefined;
+    if (!g) return;
+    if (!g.cancelled && Math.hypot(x - g.x, y - g.y) <= TAP_SLOP_PX) onTap();
+  };
+  const cancel = (): void => {
+    if (gesture) gesture.cancelled = true;
+  };
 
   button.addEventListener("touchstart", (event) => {
     event.preventDefault();
     const t = event.changedTouches[0];
-    start = t ? { x: t.clientX, y: t.clientY, id: t.identifier } : undefined;
+    if (t) begin(t.clientX, t.clientY);
   }, { passive: false });
   button.addEventListener("touchmove", (event) => {
-    const t = start ? touchOf(event.changedTouches, start.id) : undefined;
-    if (t && moved(start, t.clientX, t.clientY)) start = undefined;
+    const t = event.changedTouches[0];
+    if (t) track(t.clientX, t.clientY);
   }, { passive: true });
   button.addEventListener("touchend", (event) => {
-    const t = start ? touchOf(event.changedTouches, start.id) : undefined;
-    const ok = t !== undefined && !moved(start, t.clientX, t.clientY);
-    start = undefined;
-    if (ok) fire();
+    const t = event.changedTouches[0];
+    if (t) finish(t.clientX, t.clientY);
+    else gesture = undefined;
   });
-  button.addEventListener("touchcancel", () => { start = undefined; });
+  button.addEventListener("touchcancel", cancel);
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    pointerStart = { x: event.clientX, y: event.clientY };
+    begin(event.clientX, event.clientY);
   });
+  button.addEventListener("pointermove", (event) => track(event.clientX, event.clientY));
   button.addEventListener("pointerup", (event) => {
-    // 没收到 pointerdown（比如被别的手势先接走）就不判断移动距离，照常算点。
-    const ok = event.button === 0 && !(pointerStart && moved(pointerStart, event.clientX, event.clientY));
-    pointerStart = undefined;
-    if (ok) fire();
+    if (event.button === 0) finish(event.clientX, event.clientY);
+    else gesture = undefined;
   });
-  button.addEventListener("pointercancel", () => { pointerStart = undefined; });
+  button.addEventListener("pointercancel", cancel);
 }
 
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */
