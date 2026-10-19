@@ -197,11 +197,62 @@ async function gunzip(data) {
   return await new Response(stream).arrayBuffer();
 }
 var DICT_FILES = /* @__PURE__ */ new Set(["pinyin_simp.table.bin", "pinyin_simp.prism.bin", "pinyin_simp.reverse.bin"]);
+var PUNCT_COMMITS = {
+  "`": "\xB7",
+  "~": "\uFF5E",
+  "@": "@",
+  "#": "#",
+  "$": "\uFFE5",
+  "%": "%",
+  "&": "&",
+  "*": "*",
+  "(": "\uFF08",
+  ")": "\uFF09",
+  "_": "\u2014\u2014",
+  "-": "-",
+  "+": "+",
+  "=": "=",
+  "[": "\u3010",
+  "]": "\u3011",
+  "{": "\u300C",
+  "}": "\u300D",
+  "|": "\uFF5C",
+  "<": "\u300A",
+  ">": "\u300B"
+};
+function yamlKey(key) {
+  if (key === "_" || key === ".") return key;
+  return `"${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+function patchPunctuation(yaml) {
+  const start = yaml.indexOf("\n  half_shape:\n");
+  if (start < 0) return { yaml, patched: 0 };
+  const rest = yaml.slice(start + 1);
+  const endRel = rest.search(/\n {2}[a-z_]+:/);
+  const end = endRel < 0 ? yaml.length : start + 1 + endRel;
+  let block = yaml.slice(start, end);
+  let patched = 0;
+  for (const [key, out] of Object.entries(PUNCT_COMMITS)) {
+    const prefix = `
+    ${yamlKey(key)}: `;
+    const at = block.indexOf(prefix);
+    if (at < 0) continue;
+    const lineEnd = block.indexOf("\n", at + 1);
+    block = `${block.slice(0, at)}${prefix}{commit: ${JSON.stringify(out)}}${lineEnd < 0 ? "" : block.slice(lineEnd)}`;
+    patched += 1;
+  }
+  return { yaml: yaml.slice(0, start) + block + yaml.slice(end), patched };
+}
 async function loadLocalAssets(skipDict = false) {
   const binaries = {};
   for (const [name, gz] of Object.entries(COMPRESSED)) {
     if (skipDict && DICT_FILES.has(name)) continue;
     binaries[name] = await gunzip(gz);
+  }
+  const schema = binaries["pinyin_simp.schema.yaml"];
+  if (schema) {
+    const { yaml } = patchPunctuation(new TextDecoder().decode(schema));
+    binaries["pinyin_simp.schema.yaml"] = new TextEncoder().encode(yaml).buffer;
   }
   return { script: rime_js_default, binaries };
 }
@@ -1971,7 +2022,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/16 11:57:28" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/19 19:37:07" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2212,9 +2263,33 @@ var KEY_MAP = {
   ":": "colon",
   "'": "apostrophe",
   "/": "slash",
-  "\\": "backslash"
+  "\\": "backslash",
+  // 1.0.4 起中文模式接管全部标点键，出什么由方案决定（见 assets.ts 的 PUNCT_COMMITS，对齐微信输入法）。
+  "`": "grave",
+  "~": "asciitilde",
+  "@": "at",
+  "#": "numbersign",
+  "$": "dollar",
+  "%": "percent",
+  "^": "asciicircum",
+  "&": "ampersand",
+  "*": "asterisk",
+  "(": "parenleft",
+  ")": "parenright",
+  "-": "minus",
+  "_": "underscore",
+  "=": "equal",
+  "+": "plus",
+  "[": "bracketleft",
+  "]": "bracketright",
+  "{": "braceleft",
+  "}": "braceright",
+  "|": "bar",
+  '"': "quotedbl",
+  "<": "less",
+  ">": "greater"
 };
-var START_PUNCTUATION = /* @__PURE__ */ new Set([",", ".", "?", "!", ";", ":", "/", "\\"]);
+var START_PUNCTUATION = /* @__PURE__ */ new Set([..."`~!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?"]);
 var COMMA_KEYS = /* @__PURE__ */ new Set(["/", "\\"]);
 var TOGGLE_KEY_LABEL = {
   Shift: "Shift",
@@ -2729,14 +2804,20 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     return () => this.deviceListeners.delete(refresh);
   }
   onunload() {
-    this.setInlinePreedit(void 0, "");
-    if (this.switchTimer !== void 0) window.clearTimeout(this.switchTimer);
-    if (this.dictFrame !== void 0) window.cancelAnimationFrame(this.dictFrame);
-    this.dict?.dispose();
-    this.dictStore?.close();
-    this.dictChip?.remove();
-    this.client?.destroy();
+    this.stopInput();
+    this.candidates?.empty();
     this.panel?.remove();
+    this.panel = void 0;
+    this.preedit = void 0;
+    this.candidates = void 0;
+    this.inlineTarget = void 0;
+    this.activeSink = void 0;
+    this.emojiHits = [];
+    this.updates = void 0;
+    this.ribbon = void 0;
+    this.status = void 0;
+    this.dictListeners.clear();
+    this.deviceListeners.clear();
   }
   /* ---------------- 引擎与词库 ---------------- */
   /** 建 Worker 并加载方案。probe：加载后打一个字母看有没有候选再取消，不上屏、不写学习记录。 */
@@ -3517,11 +3598,15 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     });
   }
   createControls() {
-    this.ribbon = this.addRibbonIcon("languages", "Just Type\uFF1A\u5207\u6362\u4E2D\u82F1\u6587", () => this.toggle());
+    const ref = { plugin: this };
+    this.register(() => {
+      ref.plugin = void 0;
+    });
+    this.ribbon = this.addRibbonIcon("languages", "Just Type\uFF1A\u5207\u6362\u4E2D\u82F1\u6587", () => ref.plugin?.toggle());
     if (!import_obsidian3.Platform.isMobile) {
       this.status = this.addStatusBarItem();
       this.status.addClass("just-type-status");
-      this.status.addEventListener("click", () => this.toggle());
+      this.registerDomEvent(this.status, "click", () => ref.plugin?.toggle());
     }
   }
   /* Shift、状态栏、ribbon 都只管中/英——和其他输入法的习惯一致。
@@ -3570,14 +3655,14 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.panel.setAttribute("aria-live", "polite");
     this.preedit = this.panel.createDiv({ cls: "just-type-preedit" });
     this.candidates = this.panel.createDiv({ cls: "just-type-candidates" });
-    this.panel.addEventListener("pointerdown", () => {
+    this.registerDomEvent(this.panel, "pointerdown", () => {
       this.panelPressAt = performance.now();
       const sink = this.activeSink;
       if (sink?.kind === "title") {
         const selection = window.getSelection();
         if (selection?.rangeCount && sink.el.contains(selection.anchorNode)) sink.range = selection.getRangeAt(0).cloneRange();
       }
-    }, true);
+    }, { capture: true });
   }
   /* ---------------- input ---------------- */
   isEditorTarget(target) {

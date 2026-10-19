@@ -344,10 +344,35 @@ const KEY_MAP: Record<string, string> = {
   ":": "colon",
   "'": "apostrophe",
   "/": "slash",
-  "\\": "backslash"
+  "\\": "backslash",
+  // 1.0.4 起中文模式接管全部标点键，出什么由方案决定（见 assets.ts 的 PUNCT_COMMITS，对齐微信输入法）。
+  "`": "grave",
+  "~": "asciitilde",
+  "@": "at",
+  "#": "numbersign",
+  "$": "dollar",
+  "%": "percent",
+  "^": "asciicircum",
+  "&": "ampersand",
+  "*": "asterisk",
+  "(": "parenleft",
+  ")": "parenright",
+  "-": "minus",
+  "_": "underscore",
+  "=": "equal",
+  "+": "plus",
+  "[": "bracketleft",
+  "]": "bracketright",
+  "{": "braceleft",
+  "}": "braceright",
+  "|": "bar",
+  "\"": "quotedbl",
+  "<": "less",
+  ">": "greater"
 };
 
-const START_PUNCTUATION = new Set([",", ".", "?", "!", ";", ":", "/", "\\"]);
+/* 中文模式下由就打个字接管的标点键：键盘上全部 32 个 ASCII 标点。要打英文符号，先按 Shift 切到英文模式。 */
+const START_PUNCTUATION = new Set([..."`~!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?"]);
 
 /* 方案里 / 和 \ 都是以「、」打头的标点菜单（后面还有 ／ ÷ 之类）。中文输入法的习惯是
    按下直接出顿号，所以菜单首项是「、」时立即确认，不让用户再按一次空格。 */
@@ -993,14 +1018,22 @@ export default class JustTypePlugin extends Plugin {
   }
 
   onunload(): void {
-    this.setInlinePreedit(undefined, "");
-    if (this.switchTimer !== undefined) window.clearTimeout(this.switchTimer);
-    if (this.dictFrame !== undefined) window.cancelAnimationFrame(this.dictFrame);
-    this.dict?.dispose();
-    this.dictStore?.close();
-    this.dictChip?.remove();
-    this.client?.destroy();
+    // 停掉引擎和词库任务，并把大块数据的引用都放掉：就算 Obsidian 或系统还留着这个旧实例的某个回调，
+    // 留下的也只是一个空壳，不会带着引擎和几十 MB 的词库数据。
+    this.stopInput();
+    this.candidates?.empty();
     this.panel?.remove();
+    this.panel = undefined;
+    this.preedit = undefined;
+    this.candidates = undefined;
+    this.inlineTarget = undefined;
+    this.activeSink = undefined;
+    this.emojiHits = [];
+    this.updates = undefined;
+    this.ribbon = undefined;
+    this.status = undefined;
+    this.dictListeners.clear();
+    this.deviceListeners.clear();
   }
 
   /* ---------------- 引擎与词库 ---------------- */
@@ -1883,11 +1916,15 @@ export default class JustTypePlugin extends Plugin {
 
   private createControls(): void {
     // Obsidian mobile has no status bar, so the ribbon carries the state there.
-    this.ribbon = this.addRibbonIcon("languages", "Just Type：切换中英文", () => this.toggle());
+    // 回调经过一个可清空的中转：Obsidian 卸载插件后，若还有地方留着这个回调，也不会把整个旧插件（连同引擎、词库）
+    // 留在内存里（1.0.4 候选版 iPad 复测：反复卸载／加载后旧实例经这类回调存活，内存一组比一组高）。
+    const ref: { plugin?: JustTypePlugin } = { plugin: this };
+    this.register(() => { ref.plugin = undefined; });
+    this.ribbon = this.addRibbonIcon("languages", "Just Type：切换中英文", () => ref.plugin?.toggle());
     if (!Platform.isMobile) {
       this.status = this.addStatusBarItem();
       this.status.addClass("just-type-status");
-      this.status.addEventListener("click", () => this.toggle());
+      this.registerDomEvent(this.status, "click", () => ref.plugin?.toggle());
     }
   }
 
@@ -1943,14 +1980,14 @@ export default class JustTypePlugin extends Plugin {
     this.preedit = this.panel.createDiv({ cls: "just-type-preedit" });
     this.candidates = this.panel.createDiv({ cls: "just-type-candidates" });
     // 捕获阶段记录，早于 iPadOS 让编辑器失焦。标题失焦后光标位置会丢，这里先存一份。
-    this.panel.addEventListener("pointerdown", () => {
+    this.registerDomEvent(this.panel, "pointerdown", () => {
       this.panelPressAt = performance.now();
       const sink = this.activeSink;
       if (sink?.kind === "title") {
         const selection = window.getSelection();
         if (selection?.rangeCount && sink.el.contains(selection.anchorNode)) sink.range = selection.getRangeAt(0).cloneRange();
       }
-    }, true);
+    }, { capture: true });
   }
 
   /* ---------------- input ---------------- */
