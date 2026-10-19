@@ -2022,7 +2022,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/19 19:37:07" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/19 20:58:15" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2152,11 +2152,49 @@ function patchWorkerSource(source) {
   }
   return patched;
 }
+var TAP_SLOP_PX = 10;
+var TAP_DEDUPE_MS = 400;
 function bindTap(button, onTap) {
-  button.addEventListener("touchstart", (event) => event.preventDefault(), { passive: false });
-  button.addEventListener("pointerdown", (event) => event.preventDefault());
+  let start;
+  let pointerStart;
+  let firedAt = -Infinity;
+  const fire = () => {
+    const now = performance.now();
+    if (now - firedAt < TAP_DEDUPE_MS) return;
+    firedAt = now;
+    onTap();
+  };
+  const moved = (from, x, y) => !from || Math.hypot(x - from.x, y - from.y) > TAP_SLOP_PX;
+  const touchOf = (list, id) => Array.from(list).find((t) => t.identifier === id);
+  button.addEventListener("touchstart", (event) => {
+    event.preventDefault();
+    const t = event.changedTouches[0];
+    start = t ? { x: t.clientX, y: t.clientY, id: t.identifier } : void 0;
+  }, { passive: false });
+  button.addEventListener("touchmove", (event) => {
+    const t = start ? touchOf(event.changedTouches, start.id) : void 0;
+    if (t && moved(start, t.clientX, t.clientY)) start = void 0;
+  }, { passive: true });
+  button.addEventListener("touchend", (event) => {
+    const t = start ? touchOf(event.changedTouches, start.id) : void 0;
+    const ok = t !== void 0 && !moved(start, t.clientX, t.clientY);
+    start = void 0;
+    if (ok) fire();
+  });
+  button.addEventListener("touchcancel", () => {
+    start = void 0;
+  });
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    pointerStart = { x: event.clientX, y: event.clientY };
+  });
   button.addEventListener("pointerup", (event) => {
-    if (event.button === 0) onTap();
+    const ok = event.button === 0 && !(pointerStart && moved(pointerStart, event.clientX, event.clientY));
+    pointerStart = void 0;
+    if (ok) fire();
+  });
+  button.addEventListener("pointercancel", () => {
+    pointerStart = void 0;
   });
 }
 function isSystemImeComposing(event) {

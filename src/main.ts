@@ -208,12 +208,56 @@ function patchWorkerSource(source: string): string {
  * 引擎结果异步回来时已不在手势里，系统不让代码把焦点放回去，字就上不了屏（0.7.20 标题点选失败）。
  * 在 touchstart 上 preventDefault 才能让焦点留在原处；代价是系统不再合成 click，所以改在抬起时选词。
  */
+/*
+ * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统会把这一下当成
+ * 拖动光标的手势接走：pointerdown 到了，pointerup 永远不来，首选点不上（1.0.4 候选版 iPad 复测 P1）。
+ * 这时 touchend 照样会到，所以 touchend 和 pointerup 谁先到算谁；同一个按钮 400ms 内只算一次，
+ * 手指移动超过 10px（想滑动或移出按钮）不算点。
+ */
+const TAP_SLOP_PX = 10;
+const TAP_DEDUPE_MS = 400;
+
 function bindTap(button: HTMLElement, onTap: () => void): void {
-  button.addEventListener("touchstart", (event) => event.preventDefault(), { passive: false });
-  button.addEventListener("pointerdown", (event) => event.preventDefault());
-  button.addEventListener("pointerup", (event) => {
-    if (event.button === 0) onTap();
+  let start: { x: number; y: number; id: number } | undefined;
+  let pointerStart: { x: number; y: number } | undefined;
+  let firedAt = -Infinity;
+  const fire = (): void => {
+    const now = performance.now();
+    if (now - firedAt < TAP_DEDUPE_MS) return;
+    firedAt = now;
+    onTap();
+  };
+  const moved = (from: { x: number; y: number } | undefined, x: number, y: number): boolean =>
+    !from || Math.hypot(x - from.x, y - from.y) > TAP_SLOP_PX;
+  const touchOf = (list: TouchList, id: number): Touch | undefined => Array.from(list).find((t) => t.identifier === id);
+
+  button.addEventListener("touchstart", (event) => {
+    event.preventDefault();
+    const t = event.changedTouches[0];
+    start = t ? { x: t.clientX, y: t.clientY, id: t.identifier } : undefined;
+  }, { passive: false });
+  button.addEventListener("touchmove", (event) => {
+    const t = start ? touchOf(event.changedTouches, start.id) : undefined;
+    if (t && moved(start, t.clientX, t.clientY)) start = undefined;
+  }, { passive: true });
+  button.addEventListener("touchend", (event) => {
+    const t = start ? touchOf(event.changedTouches, start.id) : undefined;
+    const ok = t !== undefined && !moved(start, t.clientX, t.clientY);
+    start = undefined;
+    if (ok) fire();
   });
+  button.addEventListener("touchcancel", () => { start = undefined; });
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    pointerStart = { x: event.clientX, y: event.clientY };
+  });
+  button.addEventListener("pointerup", (event) => {
+    // 没收到 pointerdown（比如被别的手势先接走）就不判断移动距离，照常算点。
+    const ok = event.button === 0 && !(pointerStart && moved(pointerStart, event.clientX, event.clientY));
+    pointerStart = undefined;
+    if (ok) fire();
+  });
+  button.addEventListener("pointercancel", () => { pointerStart = undefined; });
 }
 
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */
