@@ -210,59 +210,64 @@ function patchWorkerSource(source: string): string {
  */
 /*
  * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统可能把这一下当成
- * 拖动光标的手势接走：pointerdown 到了，pointerup 不来，首选点不上（1.0.4 候选版 iPad 复测 P1）。
- * 这时 touchend 照样会到。所以把 pointer 和 touch 两路看成同一次手势：
- * - 按下（pointerdown 或 touchstart，谁先到）开始一次手势，记下起点；
- * - 中途任一路移动超过 10px，这次手势就作废，滑回原处也不恢复（第三轮复测：滑开再滑回仍会选词）；
- * - 任一路取消（pointercancel、touchcancel）也作废；
- * - 第一个结束信号（pointerup 或 touchend）结束手势，没作废就算点了一下；后到的另一路结束信号不再算；
- * - 没有按下记录的结束信号不算点。
+ * 拖动光标的手势接走：pointer 这一路没有 pointerup（可能变成 pointercancel），但 touchend 照样会到
+ * （1.0.4 候选版 iPad 复测 P1）。所以 pointer 和 touch 两路看成同一次手势：
+ * - 按下（pointerdown 或 touchstart，谁先到）开始一次手势、记下起点；两路都已结束或取消，下次按下就是新手势；
+ * - 中途任一路移动超过 10px，整次作废，滑回原处也不恢复（第三轮复测：滑开再滑回仍会选词）；
+ * - 某一路取消只结束那一路，不连带另一路：pointercancel 之后 touchend 仍可以算点（正是 P1 的情形）；
+ * - 某一路正常结束、没作废、松手处离起点不超过 10px，就算点一下；整次手势只算一次。
  */
 const TAP_SLOP_PX = 10;
 
+type TapChannel = "pointer" | "touch";
+
 function bindTap(button: HTMLElement, onTap: () => void): void {
-  let gesture: { x: number; y: number; cancelled: boolean } | undefined;
-  const begin = (x: number, y: number): void => {
-    gesture ??= { x, y, cancelled: false };
+  let g: { x: number; y: number; moved: boolean; fired: boolean; pointer: "idle" | "down" | "done"; touch: "idle" | "down" | "done" } | undefined;
+  const far = (x: number, y: number): boolean => !g || Math.hypot(x - g.x, y - g.y) > TAP_SLOP_PX;
+  const begin = (ch: TapChannel, x: number, y: number): void => {
+    const alive = g !== undefined && (g.pointer === "down" || g.touch === "down");
+    if (!g || !alive || g[ch] !== "idle") g = { x, y, moved: false, fired: false, pointer: "idle", touch: "idle" };
+    g[ch] = "down";
   };
-  const track = (x: number, y: number): void => {
-    if (gesture && Math.hypot(x - gesture.x, y - gesture.y) > TAP_SLOP_PX) gesture.cancelled = true;
+  const move = (x: number, y: number): void => {
+    if (g && far(x, y)) g.moved = true;
   };
-  const finish = (x: number, y: number): void => {
-    const g = gesture;
-    gesture = undefined;
-    if (!g) return;
-    if (!g.cancelled && Math.hypot(x - g.x, y - g.y) <= TAP_SLOP_PX) onTap();
+  const end = (ch: TapChannel, x: number, y: number): void => {
+    if (!g || g[ch] !== "down") return;
+    g[ch] = "done";
+    if (g.moved || g.fired || far(x, y)) return;
+    g.fired = true;
+    onTap();
   };
-  const cancel = (): void => {
-    if (gesture) gesture.cancelled = true;
+  const cancel = (ch: TapChannel): void => {
+    if (g && g[ch] === "down") g[ch] = "done";
   };
 
   button.addEventListener("touchstart", (event) => {
     event.preventDefault();
     const t = event.changedTouches[0];
-    if (t) begin(t.clientX, t.clientY);
+    if (t) begin("touch", t.clientX, t.clientY);
   }, { passive: false });
   button.addEventListener("touchmove", (event) => {
     const t = event.changedTouches[0];
-    if (t) track(t.clientX, t.clientY);
+    if (t) move(t.clientX, t.clientY);
   }, { passive: true });
   button.addEventListener("touchend", (event) => {
     const t = event.changedTouches[0];
-    if (t) finish(t.clientX, t.clientY);
-    else gesture = undefined;
+    if (t) end("touch", t.clientX, t.clientY);
+    else cancel("touch");
   });
-  button.addEventListener("touchcancel", cancel);
+  button.addEventListener("touchcancel", () => cancel("touch"));
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    begin(event.clientX, event.clientY);
+    begin("pointer", event.clientX, event.clientY);
   });
-  button.addEventListener("pointermove", (event) => track(event.clientX, event.clientY));
+  button.addEventListener("pointermove", (event) => move(event.clientX, event.clientY));
   button.addEventListener("pointerup", (event) => {
-    if (event.button === 0) finish(event.clientX, event.clientY);
-    else gesture = undefined;
+    if (event.button === 0) end("pointer", event.clientX, event.clientY);
+    else cancel("pointer");
   });
-  button.addEventListener("pointercancel", cancel);
+  button.addEventListener("pointercancel", () => cancel("pointer"));
 }
 
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */

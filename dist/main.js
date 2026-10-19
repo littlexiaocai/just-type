@@ -2022,7 +2022,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/19 22:03:48" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/20 00:02:30" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2154,47 +2154,51 @@ function patchWorkerSource(source) {
 }
 var TAP_SLOP_PX = 10;
 function bindTap(button, onTap) {
-  let gesture;
-  const begin = (x, y) => {
-    gesture ?? (gesture = { x, y, cancelled: false });
+  let g;
+  const far = (x, y) => !g || Math.hypot(x - g.x, y - g.y) > TAP_SLOP_PX;
+  const begin = (ch, x, y) => {
+    const alive = g !== void 0 && (g.pointer === "down" || g.touch === "down");
+    if (!g || !alive || g[ch] !== "idle") g = { x, y, moved: false, fired: false, pointer: "idle", touch: "idle" };
+    g[ch] = "down";
   };
-  const track = (x, y) => {
-    if (gesture && Math.hypot(x - gesture.x, y - gesture.y) > TAP_SLOP_PX) gesture.cancelled = true;
+  const move = (x, y) => {
+    if (g && far(x, y)) g.moved = true;
   };
-  const finish = (x, y) => {
-    const g = gesture;
-    gesture = void 0;
-    if (!g) return;
-    if (!g.cancelled && Math.hypot(x - g.x, y - g.y) <= TAP_SLOP_PX) onTap();
+  const end = (ch, x, y) => {
+    if (!g || g[ch] !== "down") return;
+    g[ch] = "done";
+    if (g.moved || g.fired || far(x, y)) return;
+    g.fired = true;
+    onTap();
   };
-  const cancel = () => {
-    if (gesture) gesture.cancelled = true;
+  const cancel = (ch) => {
+    if (g && g[ch] === "down") g[ch] = "done";
   };
   button.addEventListener("touchstart", (event) => {
     event.preventDefault();
     const t = event.changedTouches[0];
-    if (t) begin(t.clientX, t.clientY);
+    if (t) begin("touch", t.clientX, t.clientY);
   }, { passive: false });
   button.addEventListener("touchmove", (event) => {
     const t = event.changedTouches[0];
-    if (t) track(t.clientX, t.clientY);
+    if (t) move(t.clientX, t.clientY);
   }, { passive: true });
   button.addEventListener("touchend", (event) => {
     const t = event.changedTouches[0];
-    if (t) finish(t.clientX, t.clientY);
-    else gesture = void 0;
+    if (t) end("touch", t.clientX, t.clientY);
+    else cancel("touch");
   });
-  button.addEventListener("touchcancel", cancel);
+  button.addEventListener("touchcancel", () => cancel("touch"));
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    begin(event.clientX, event.clientY);
+    begin("pointer", event.clientX, event.clientY);
   });
-  button.addEventListener("pointermove", (event) => track(event.clientX, event.clientY));
+  button.addEventListener("pointermove", (event) => move(event.clientX, event.clientY));
   button.addEventListener("pointerup", (event) => {
-    if (event.button === 0) finish(event.clientX, event.clientY);
-    else gesture = void 0;
+    if (event.button === 0) end("pointer", event.clientX, event.clientY);
+    else cancel("pointer");
   });
-  button.addEventListener("pointercancel", cancel);
+  button.addEventListener("pointercancel", () => cancel("pointer"));
 }
 function isSystemImeComposing(event) {
   return event.isComposing || event.keyCode === 229;
