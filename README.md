@@ -4,7 +4,19 @@
 
 Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
 
-## 最近更新 · What's new（1.0.3）
+## 最近更新 · What's new（1.0.4）
+
+- **支持全部常用中文标点，和微信输入法一样**：书名号《》、间隔号 ·、全角竖线 ｜、【】「」、省略号 ……、破折号 —— 等，中文模式下按键直接打出。写 Markdown 需要英文符号时，按 Shift 切到英文
+- **手指点选更可靠**：修好了有时点第一个候选上不了屏的问题；手指按住候选滑开再松手，不会误选
+- **安装和更新更稳**：自动修复失败时会明确告诉你怎么办；更新没下载完整时，「更新」按钮会重新出现
+- **停用和卸载更干净**：停用或卸载插件时，引擎和词库占用的内存会释放掉
+
+- **All common Chinese punctuation, the same as WeChat Input**: 《》, ·, ｜, 【】「」, ……, —— and more, typed directly in Chinese mode. Switch to English with Shift when you need ASCII symbols for Markdown
+- **More reliable tap-to-select**: fixed taps on the first candidate sometimes not committing; sliding away from a candidate before lifting your finger no longer selects it
+- **Steadier install and update**: if automatic repair fails, Just Type tells you what to do; if an update did not download fully, the Update button comes back
+- **Cleaner disable and unload**: turning the plugin off now releases the memory used by the engine and dictionary
+
+### 1.0.3
 
 - **安装更可靠**：网络不稳时，Obsidian 偶尔会漏下载插件的样式文件，候选栏就会跑到屏幕左下角。现在插件发现后会自动补好，不用重装
 - **更新没装完整时会提醒你**：如果更新时程序文件没下载下来，插件会恢复到原来的版本，并提示你再更新一次，不会再出现「显示是新版、用的还是旧版」的情况
