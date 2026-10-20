@@ -69,6 +69,10 @@
   display: flex;
   gap: 6px;
   overflow-x: auto;
+  /* 只允许横向滑动候选栏；不触发页面缩放、竖向滚动和回弹带动整页。 */
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .just-type-candidates::-webkit-scrollbar {
@@ -77,6 +81,11 @@
 
 .just-type-candidates button {
   flex: 0 0 auto;
+  /* 长按候选不弹系统的选字放大镜和拷贝菜单。 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-x;
   min-height: 34px;
   padding: 5px 10px;
   border: 0;

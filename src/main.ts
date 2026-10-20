@@ -207,6 +207,8 @@ function patchWorkerSource(source: string): string {
  * 正文（CodeMirror）自己记着光标，失焦了照样能插；内联标题是普通可编辑元素，失焦后
  * 引擎结果异步回来时已不在手势里，系统不让代码把焦点放回去，字就上不了屏（0.7.20 标题点选失败）。
  * 在 touchstart 上 preventDefault 才能让焦点留在原处；代价是系统不再合成 click，所以改在抬起时选词。
+ * 1.0.5：touchstart 上 preventDefault 同时也挡住了候选栏的横向滑动。所以只在标题里输入时这样做（holdFocus）；
+ * 正文里放开滑动，改在 touchend 上 preventDefault 拦下随后合成的鼠标事件和 click。
  */
 /*
  * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统可能把这一下当成
@@ -221,7 +223,7 @@ const TAP_SLOP_PX = 10;
 
 type TapChannel = "pointer" | "touch";
 
-function bindTap(button: HTMLElement, onTap: () => void): void {
+function bindTap(button: HTMLElement, onTap: () => void, holdFocus = false): void {
   let g: { x: number; y: number; moved: boolean; fired: boolean; pointer: "idle" | "down" | "done"; touch: "idle" | "down" | "done" } | undefined;
   const far = (x: number, y: number): boolean => !g || Math.hypot(x - g.x, y - g.y) > TAP_SLOP_PX;
   const begin = (ch: TapChannel, x: number, y: number): void => {
@@ -244,15 +246,16 @@ function bindTap(button: HTMLElement, onTap: () => void): void {
   };
 
   button.addEventListener("touchstart", (event) => {
-    event.preventDefault();
+    if (holdFocus) event.preventDefault();
     const t = event.changedTouches[0];
     if (t) begin("touch", t.clientX, t.clientY);
-  }, { passive: false });
+  }, { passive: !holdFocus });
   button.addEventListener("touchmove", (event) => {
     const t = event.changedTouches[0];
     if (t) move(t.clientX, t.clientY);
   }, { passive: true });
   button.addEventListener("touchend", (event) => {
+    if (event.cancelable) event.preventDefault();
     const t = event.changedTouches[0];
     if (t) end("touch", t.clientX, t.clientY);
     else cancel("touch");
@@ -2566,8 +2569,15 @@ export default class JustTypePlugin extends Plugin {
               new Notice(`Just Type 输入失败：${this.errorMessage(error)}\n可运行命令「诊断报告 (report)」查看详情`, 8000);
             });
         });
-      });
+      }, sink.kind === "title");
     });
+    // 没有候选时（比如拼音打到一半引擎暂时没给候选），正文里的拼音照样画在光标处，候选栏本身不显示：
+    // 否则空面板只剩边框和内边距，看起来像一个小圆圈（1.0.4 反馈）。标题里拼音画在面板上，有拼音就照常显示。
+    const hasCandidates = (result.candidates?.length ?? 0) > 0;
+    if (!hasCandidates && (inline || !text)) {
+      this.panel.removeClass("is-visible");
+      return;
+    }
     const anchor = sink.kind === "title"
       ? this.titleRect(sink.el)
       : (inline ? this.inlinePreeditRect() : null) ?? this.caretRect(sink.view);
