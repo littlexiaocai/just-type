@@ -47,55 +47,12 @@ async function gunzip(data: Uint8Array): Promise<ArrayBuffer> {
 /** 内置基础词库的三个文件；用完整词库时由下载的同名文件替换。 */
 export const DICT_FILES = new Set(["pinyin_simp.table.bin", "pinyin_simp.prism.bin", "pinyin_simp.reverse.bin"]);
 
-/*
- * 中文模式下的标点，对齐微信输入法（Mac 版 2026-10 实测）：按下直接出，不弹候选菜单。
- * 上游方案里不少键是候选菜单（比如 | 有 8 个），或者出的是半角符号（` ~ 等），这里改掉。
- * 只改 half_shape（默认是半角状态）；/ 和 \ 保留「、」打头的菜单，由插件立即确认（见 main.ts confirmComma）。
- * 引号 " ' 保留成对交替。
- */
-export const PUNCT_COMMITS: Record<string, string> = {
-  "`": "·", "~": "～", "@": "@", "#": "#", "$": "￥", "%": "%", "&": "&", "*": "*",
-  "(": "（", ")": "）", "_": "——", "-": "-", "+": "+", "=": "=",
-  "[": "【", "]": "】", "{": "「", "}": "」", "|": "｜", "<": "《", ">": "》"
-};
-
-/** yaml 里键的写法：. 和 _ 不加引号，其余加引号（反斜杠、双引号要转义）。 */
-function yamlKey(key: string): string {
-  if (key === "_" || key === ".") return key;
-  return `"${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-/** 返回改好的方案和实际改到的键数；某个键没找到就保留原样，绝不因此让引擎起不来。 */
-export function patchPunctuation(yaml: string): { yaml: string; patched: number } {
-  const start = yaml.indexOf("\n  half_shape:\n");
-  if (start < 0) return { yaml, patched: 0 };
-  const rest = yaml.slice(start + 1);
-  const endRel = rest.search(/\n {2}[a-z_]+:/);
-  const end = endRel < 0 ? yaml.length : start + 1 + endRel;
-  let block = yaml.slice(start, end);
-  let patched = 0;
-  for (const [key, out] of Object.entries(PUNCT_COMMITS)) {
-    const prefix = `\n    ${yamlKey(key)}: `;
-    const at = block.indexOf(prefix);
-    if (at < 0) continue;
-    const lineEnd = block.indexOf("\n", at + 1);
-    block = `${block.slice(0, at)}${prefix}{commit: ${JSON.stringify(out)}}${lineEnd < 0 ? "" : block.slice(lineEnd)}`;
-    patched += 1;
-  }
-  return { yaml: yaml.slice(0, start) + block + yaml.slice(end), patched };
-}
-
 /** 解压内嵌资源，每次起引擎时做一次。skipDict：要换成完整词库时不解压内置词库，省一份内存。 */
 export async function loadLocalAssets(skipDict = false): Promise<LocalAssets> {
   const binaries: Record<string, ArrayBuffer> = {};
   for (const [name, gz] of Object.entries(COMPRESSED)) {
     if (skipDict && DICT_FILES.has(name)) continue;
     binaries[name] = await gunzip(gz);
-  }
-  const schema = binaries["pinyin_simp.schema.yaml"];
-  if (schema) {
-    const { yaml } = patchPunctuation(new TextDecoder().decode(schema));
-    binaries["pinyin_simp.schema.yaml"] = new TextEncoder().encode(yaml).buffer;
   }
   return { script: rimeScript, binaries };
 }

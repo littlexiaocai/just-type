@@ -1,22 +1,14 @@
 # Just Type · 就打个字
 
+> **版本公告（2026-10-20）**：1.0.4 已撤回，收到输入卡顿和异常字符的反馈，原因正在排查。当前提供 **[1.0.3 稳定版](https://github.com/littlexiaocai/just-type/releases/tag/1.0.3)**。已安装 1.0.4 不会自动降级；如需回退，请先完全退出 Obsidian，备份插件目录后，用 1.0.3 的 `main.js`、`manifest.json`、`styles.css` 一起替换原文件，再重新打开。保留 `data.json` 和其他用户数据，不要删除整个插件目录。
+>
+> **Release notice (2026-10-20)**: 1.0.4 has been withdrawn while reports of typing delays and unexpected characters are investigated. **[1.0.3 is the current stable release](https://github.com/littlexiaocai/just-type/releases/tag/1.0.3)**. Existing 1.0.4 installations do not downgrade automatically. To roll back, fully quit Obsidian, back up the plugin folder, and replace all three installation files (`main.js`, `manifest.json`, `styles.css`) with 1.0.3 before reopening. Keep `data.json` and other user data; do not delete the plugin folder.
+
 在 Obsidian 里用 iPad 外接键盘顺畅地打中文：插件自带拼音输入法，绕开系统拼音输入法在 Obsidian 里的卡顿。
 
 Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pinyin input method that bypasses the lag of the system Pinyin IME.
 
-## 最近更新 · What's new（1.0.4）
-
-- **支持全部常用中文标点，和微信输入法一样**：书名号《》、间隔号 ·、全角竖线 ｜、【】「」、省略号 ……、破折号 —— 等，中文模式下按键直接打出。写 Markdown 需要英文符号时，按 Shift 切到英文
-- **手指点选更可靠**：修好了有时点第一个候选上不了屏的问题；手指按住候选滑开再松手，不会误选
-- **安装和更新更稳**：自动修复失败时会明确告诉你怎么办；更新没下载完整时，「更新」按钮会重新出现
-- **停用和卸载更干净**：停用或卸载插件时，引擎和词库占用的内存会释放掉
-
-- **All common Chinese punctuation, the same as WeChat Input**: 《》, ·, ｜, 【】「」, ……, —— and more, typed directly in Chinese mode. Switch to English with Shift when you need ASCII symbols for Markdown
-- **More reliable tap-to-select**: fixed taps on the first candidate sometimes not committing; sliding away from a candidate before lifting your finger no longer selects it
-- **Steadier install and update**: if automatic repair fails, Just Type tells you what to do; if an update did not download fully, the Update button comes back
-- **Cleaner disable and unload**: turning the plugin off now releases the memory used by the engine and dictionary
-
-### 1.0.3
+## 最近更新 · What's new（1.0.3）
 
 - **安装更可靠**：网络不稳时，Obsidian 偶尔会漏下载插件的样式文件，候选栏就会跑到屏幕左下角。现在插件发现后会自动补好，不用重装
 - **更新没装完整时会提醒你**：如果更新时程序文件没下载下来，插件会恢复到原来的版本，并提示你再更新一次，不会再出现「显示是新版、用的还是旧版」的情况
@@ -83,21 +75,6 @@ Three-character words, four-character idioms and everyday phrases come up right 
 4. **选词**：空格选第一个，数字键选第几个，也可以用手指点。
 5. **表情**：仍用键盘上的 🌐 地球键调出。能否调出取决于键盘列表里是否启用了「表情符号」，以及 设置 → 通用 → 键盘 → 实体键盘 → 按下 🌐 显示表情符号。
 
-**中文标点**：中文模式下按键直接出中文标点，和微信输入法一样；要打英文符号（比如双链的 `[ ]`、表格的 `|`），先按 Shift 切到英文。
-
-| 中文标点 | 怎么按 | 中文标点 | 怎么按 |
-|---|---|---|---|
-| ， | `,` | 《 》 | Shift + `,`　Shift + `.` |
-| 。 | `.` | 【 】 | `[`　`]` |
-| 、 | `/` 或 `\` | 「 」 | Shift + `[`　Shift + `]` |
-| ； | `;` | （ ） | Shift + `9`　Shift + `0` |
-| ： | Shift + `;` | ……（省略号） | Shift + `6` |
-| ？ | Shift + `/` | ——（破折号） | Shift + `-` |
-| ！ | Shift + `1` | ·（间隔号） | `` ` ``（数字 1 左边） |
-| “ ” | Shift + `'`，按一次出前引号、再按一次出后引号 | ～ | Shift + `` ` `` |
-| ‘ ’ | `'`，同上 | ｜（全角竖线） | Shift + `\` |
-|  |  | ￥ | Shift + `4` |
-
 系统键盘在中文拼音时，Shift 归系统输入法（比如微信、搜狗用它切中英），Just Type 不会跟着切换。接手和退出时，Just Type 都会弹出提示：
 
 - 接手时：「Just Type 已就绪——按 Shift 在中英文之间切换」
@@ -118,8 +95,6 @@ Three-character words, four-character idioms and everyday phrases come up right 
 3. Tap **Shift** on its own to switch Chinese and English inside Just Type, without touching the system keyboard. You can change the key to Control / Option / Command in plugin settings.
 4. **Pick a candidate** with Space (the first one), a number key, or a tap.
 5. **Emoji** still uses the 🌐 globe key. It depends on Emoji being enabled in your keyboard list, and on Settings → General → Keyboard → Hardware Keyboard → Press 🌐 to show Emoji.
-
-**Chinese punctuation**: in Chinese mode the punctuation keys type Chinese punctuation directly, the same as WeChat Input: ，。、？！：； “” ‘’ （） 《》 【】 「」 ……  ——  ·  ｜ ～ ￥. Switch to English with Shift when you need ASCII symbols for Markdown, such as `[[ ]]` or table `|`.
 
 While the system keyboard is on Chinese Pinyin, Shift belongs to the system IME and Just Type does not toggle. Just Type shows a notice both when it takes over and when it steps aside.
 
