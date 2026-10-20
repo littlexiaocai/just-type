@@ -273,6 +273,22 @@ function bindTap(button: HTMLElement, onTap: () => void, holdFocus = false): voi
   button.addEventListener("pointercancel", () => cancel("pointer"));
 }
 
+/*
+ * 彻底清空引擎里的输入。分段选词后（比如 nihao 先选了「你」），一次 Escape 只清掉还没选的 hao，
+ * 已选的「你」仍留在引擎里；界面却已经藏起来了，下次输入就会带出一个看不见的「你」
+ * （1.0.5 候选版 iPad 测试 P1：选了一半再插表情，得到「☺️你你好」）。所以连发 Escape，直到引擎报告空为止。
+ * 由 exclusive 一口气做完，中途不会插进用户新按的键。
+ */
+const CLEAR_ESCAPE_LIMIT = 8;
+
+async function clearEngine(send: <R>(name: string, ...args: unknown[]) => Promise<R>): Promise<boolean> {
+  for (let i = 0; i < CLEAR_ESCAPE_LIMIT; i++) {
+    const r = await send<RimeResult>("process", "{Escape}");
+    if (r.state !== 1 || !`${r.head ?? ""}${r.body ?? ""}${r.tail ?? ""}`) return true;
+  }
+  return false;
+}
+
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */
 function isSystemImeComposing(event: KeyboardEvent): boolean {
   return event.isComposing || event.keyCode === 229;
@@ -343,8 +359,16 @@ class RimeWorkerClient {
   }
 
   call<T>(name: string, ...args: unknown[]): Promise<T> {
+    return this.exclusive((send) => send<T>(name, ...args));
+  }
+
+  /**
+   * 排进同一条队列、但一口气做完几步：中间不会插进别的调用（比如用户紧接着按的键）。
+   * 取消输入要连发几次 Escape 时用，免得把用户刚打的新字也清掉。
+   */
+  exclusive<T>(task: (send: <R>(name: string, ...args: unknown[]) => Promise<R>) => Promise<T>): Promise<T> {
     if (this.fatal) return Promise.reject(this.fatal);
-    const run = () => new Promise<T>((resolve, reject) => {
+    const send = <R>(name: string, ...args: unknown[]): Promise<R> => new Promise<R>((resolve, reject) => {
       // 排在队里的调用轮到时引擎可能已经停了：直接失败。否则会发给已终止的 Worker、永远等不到回复，
       // 挂着的回调会把整个旧插件（连同几十 MB 的词库数据）留在内存里（1.0.3 iPad 补测发现）。
       if (this.fatal) {
@@ -352,11 +376,12 @@ class RimeWorkerClient {
         return;
       }
       this.pending = {
-        resolve: (value) => resolve(value as T),
+        resolve: (value) => resolve(value as R),
         reject
       };
       this.worker.postMessage({ name, args, transferableIndices: [] });
     });
+    const run = () => task(send);
     const result = this.chain.then(run, run);
     this.chain = result.catch(() => undefined);
     return result;
@@ -2610,7 +2635,11 @@ export default class JustTypePlugin extends Plugin {
     this.composing = false;
     this.discardThrough = this.inputSequence;
     this.hidePanel();
-    if (this.ready) this.withEngine(() => void this.client?.call<RimeResult>("process", "{Escape}").catch(() => undefined));
+    if (this.ready) {
+      this.withEngine(() => void this.client?.exclusive((send) => clearEngine(send))
+        .then((cleared) => { if (!cleared) this.log(`取消输入：连发 ${CLEAR_ESCAPE_LIMIT} 次 Escape 后引擎仍未清空`); })
+        .catch(() => undefined));
+    }
   }
 
   private hidePanel(): void {

@@ -9,12 +9,14 @@ Type Chinese smoothly in Obsidian with an iPad hardware keyboard: a built-in Pin
 - **支持全部常用中文标点，和微信输入法一样**：书名号《》、间隔号 ·、全角竖线 ｜、【】「」、省略号 ……、破折号 —— 等，中文模式下按键直接打出。写 Markdown 需要英文符号时，按 Shift 切到英文
 - **手指点选更可靠**：修好了有时点第一个候选上不了屏的问题；手指按住候选滑开再松手，不会误选；候选多时可以用手指左右滑动候选栏
 - **修好了打拼音时偶尔在光标下方出现一个空的小圆圈**
+- **修好了选词选到一半时插入表情或切换笔记，之后打字会多出一个字的问题**
 - **安装和更新更稳**：自动修复失败时会明确告诉你怎么办；更新没下载完整时，「更新」按钮会重新出现
 - **停用和卸载更干净**：停用或卸载插件时，引擎和词库占用的内存会释放掉
 
 - **All common Chinese punctuation, the same as WeChat Input**: 《》, ·, ｜, 【】「」, ……, —— and more, typed directly in Chinese mode. Switch to English with Shift when you need ASCII symbols for Markdown
 - **More reliable tap-to-select**: fixed taps on the first candidate sometimes not committing; sliding away from a candidate before lifting your finger no longer selects it; swipe the candidate bar sideways when there are many candidates
 - **Fixed** a small empty circle that sometimes appeared under the cursor while typing Pinyin
+- **Fixed** an extra character appearing in your next input after inserting an emoji or switching notes halfway through picking words
 - **Steadier install and update**: if automatic repair fails, Just Type tells you what to do; if an update did not download fully, the Update button comes back
 - **Cleaner disable and unload**: turning the plugin off now releases the memory used by the engine and dictionary
 

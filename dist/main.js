@@ -1929,6 +1929,7 @@ var RELEASE_NOTES = [
       "\u652F\u6301\u5168\u90E8\u5E38\u7528\u4E2D\u6587\u6807\u70B9\uFF0C\u548C\u5FAE\u4FE1\u8F93\u5165\u6CD5\u4E00\u6837\uFF1A\u4E66\u540D\u53F7\u300A\u300B\u3001\u95F4\u9694\u53F7 \xB7\u3001\u5168\u89D2\u7AD6\u7EBF \uFF5C\u3001\u3010\u3011\u300C\u300D\u3001\u7701\u7565\u53F7 \u2026\u2026\u3001\u7834\u6298\u53F7 \u2014\u2014 \u7B49\uFF0C\u4E2D\u6587\u6A21\u5F0F\u4E0B\u6309\u952E\u76F4\u63A5\u6253\u51FA\u3002\u5199 Markdown \u9700\u8981\u82F1\u6587\u7B26\u53F7\u65F6\uFF0C\u6309 Shift \u5207\u5230\u82F1\u6587",
       "\u624B\u6307\u70B9\u9009\u66F4\u53EF\u9760\uFF1A\u4FEE\u597D\u4E86\u6709\u65F6\u70B9\u7B2C\u4E00\u4E2A\u5019\u9009\u4E0A\u4E0D\u4E86\u5C4F\u7684\u95EE\u9898\uFF1B\u624B\u6307\u6309\u4F4F\u5019\u9009\u6ED1\u5F00\u518D\u677E\u624B\uFF0C\u4E0D\u4F1A\u8BEF\u9009\uFF1B\u5019\u9009\u591A\u65F6\u53EF\u4EE5\u7528\u624B\u6307\u5DE6\u53F3\u6ED1\u52A8\u5019\u9009\u680F",
       "\u4FEE\u597D\u4E86\u6253\u62FC\u97F3\u65F6\u5076\u5C14\u5728\u5149\u6807\u4E0B\u65B9\u51FA\u73B0\u4E00\u4E2A\u7A7A\u7684\u5C0F\u5706\u5708",
+      "\u4FEE\u597D\u4E86\u9009\u8BCD\u9009\u5230\u4E00\u534A\u65F6\u63D2\u5165\u8868\u60C5\u6216\u5207\u6362\u7B14\u8BB0\uFF0C\u4E4B\u540E\u6253\u5B57\u4F1A\u591A\u51FA\u4E00\u4E2A\u5B57\u7684\u95EE\u9898",
       "\u5B89\u88C5\u548C\u66F4\u65B0\u66F4\u7A33\uFF1A\u81EA\u52A8\u4FEE\u590D\u5931\u8D25\u65F6\u4F1A\u660E\u786E\u544A\u8BC9\u4F60\u600E\u4E48\u529E\uFF1B\u66F4\u65B0\u6CA1\u4E0B\u8F7D\u5B8C\u6574\u65F6\uFF0C\u300C\u66F4\u65B0\u300D\u6309\u94AE\u4F1A\u91CD\u65B0\u51FA\u73B0",
       "\u505C\u7528\u548C\u5378\u8F7D\u66F4\u5E72\u51C0\uFF1A\u505C\u7528\u6216\u5378\u8F7D\u63D2\u4EF6\u65F6\uFF0C\u5F15\u64CE\u548C\u8BCD\u5E93\u5360\u7528\u7684\u5185\u5B58\u4F1A\u91CA\u653E\u6389"
     ]
@@ -2032,7 +2033,7 @@ var DeviceSettings = class {
 
 // src/main.ts
 var PLUGIN_VERSION = manifest_default.version;
-var BUILD_TIME = true ? "2026/10/20 11:05:38" : "\u672A\u77E5";
+var BUILD_TIME = true ? "2026/10/20 12:09:16" : "\u672A\u77E5";
 var INIT_TIMEOUT_MS = 45e3;
 var MAX_TRACE = 60;
 var REPORT_FOLDER = "\u5C31\u6253\u4E2A\u5B57\u8BCA\u65AD";
@@ -2211,6 +2212,14 @@ function bindTap(button, onTap, holdFocus = false) {
   });
   button.addEventListener("pointercancel", () => cancel("pointer"));
 }
+var CLEAR_ESCAPE_LIMIT = 8;
+async function clearEngine(send) {
+  for (let i = 0; i < CLEAR_ESCAPE_LIMIT; i++) {
+    const r = await send("process", "{Escape}");
+    if (r.state !== 1 || !`${r.head ?? ""}${r.body ?? ""}${r.tail ?? ""}`) return true;
+  }
+  return false;
+}
 function isSystemImeComposing(event) {
   return event.isComposing || event.keyCode === 229;
 }
@@ -2263,8 +2272,15 @@ var RimeWorkerClient = class {
     });
   }
   call(name, ...args) {
+    return this.exclusive((send) => send(name, ...args));
+  }
+  /**
+   * 排进同一条队列、但一口气做完几步：中间不会插进别的调用（比如用户紧接着按的键）。
+   * 取消输入要连发几次 Escape 时用，免得把用户刚打的新字也清掉。
+   */
+  exclusive(task) {
     if (this.fatal) return Promise.reject(this.fatal);
-    const run = () => new Promise((resolve, reject) => {
+    const send = (name, ...args) => new Promise((resolve, reject) => {
       if (this.fatal) {
         reject(this.fatal);
         return;
@@ -2275,6 +2291,7 @@ var RimeWorkerClient = class {
       };
       this.worker.postMessage({ name, args, transferableIndices: [] });
     });
+    const run = () => task(send);
     const result = this.chain.then(run, run);
     this.chain = result.catch(() => void 0);
     return result;
@@ -4188,7 +4205,11 @@ var JustTypePlugin = class extends import_obsidian3.Plugin {
     this.composing = false;
     this.discardThrough = this.inputSequence;
     this.hidePanel();
-    if (this.ready) this.withEngine(() => void this.client?.call("process", "{Escape}").catch(() => void 0));
+    if (this.ready) {
+      this.withEngine(() => void this.client?.exclusive((send) => clearEngine(send)).then((cleared) => {
+        if (!cleared) this.log(`\u53D6\u6D88\u8F93\u5165\uFF1A\u8FDE\u53D1 ${CLEAR_ESCAPE_LIMIT} \u6B21 Escape \u540E\u5F15\u64CE\u4ECD\u672A\u6E05\u7A7A`);
+      }).catch(() => void 0));
+    }
   }
   hidePanel() {
     this.setInlinePreedit(void 0, "");
