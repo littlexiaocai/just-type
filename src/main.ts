@@ -208,12 +208,66 @@ function patchWorkerSource(source: string): string {
  * 引擎结果异步回来时已不在手势里，系统不让代码把焦点放回去，字就上不了屏（0.7.20 标题点选失败）。
  * 在 touchstart 上 preventDefault 才能让焦点留在原处；代价是系统不再合成 click，所以改在抬起时选词。
  */
+/*
+ * 1.0.4：只靠 pointerup 不够。iPad 上候选栏紧贴在光标下方，第一个候选正好压着光标，系统可能把这一下当成
+ * 拖动光标的手势接走：pointer 这一路没有 pointerup（可能变成 pointercancel），但 touchend 照样会到
+ * （1.0.4 候选版 iPad 复测 P1）。所以 pointer 和 touch 两路看成同一次手势：
+ * - 按下（pointerdown 或 touchstart，谁先到）开始一次手势、记下起点；两路都已结束或取消，下次按下就是新手势；
+ * - 中途任一路移动超过 10px，整次作废，滑回原处也不恢复（第三轮复测：滑开再滑回仍会选词）；
+ * - 某一路取消只结束那一路，不连带另一路：pointercancel 之后 touchend 仍可以算点（正是 P1 的情形）；
+ * - 某一路正常结束、没作废、松手处离起点不超过 10px，就算点一下；整次手势只算一次。
+ */
+const TAP_SLOP_PX = 10;
+
+type TapChannel = "pointer" | "touch";
+
 function bindTap(button: HTMLElement, onTap: () => void): void {
-  button.addEventListener("touchstart", (event) => event.preventDefault(), { passive: false });
-  button.addEventListener("pointerdown", (event) => event.preventDefault());
-  button.addEventListener("pointerup", (event) => {
-    if (event.button === 0) onTap();
+  let g: { x: number; y: number; moved: boolean; fired: boolean; pointer: "idle" | "down" | "done"; touch: "idle" | "down" | "done" } | undefined;
+  const far = (x: number, y: number): boolean => !g || Math.hypot(x - g.x, y - g.y) > TAP_SLOP_PX;
+  const begin = (ch: TapChannel, x: number, y: number): void => {
+    const alive = g !== undefined && (g.pointer === "down" || g.touch === "down");
+    if (!g || !alive || g[ch] !== "idle") g = { x, y, moved: false, fired: false, pointer: "idle", touch: "idle" };
+    g[ch] = "down";
+  };
+  const move = (x: number, y: number): void => {
+    if (g && far(x, y)) g.moved = true;
+  };
+  const end = (ch: TapChannel, x: number, y: number): void => {
+    if (!g || g[ch] !== "down") return;
+    g[ch] = "done";
+    if (g.moved || g.fired || far(x, y)) return;
+    g.fired = true;
+    onTap();
+  };
+  const cancel = (ch: TapChannel): void => {
+    if (g && g[ch] === "down") g[ch] = "done";
+  };
+
+  button.addEventListener("touchstart", (event) => {
+    event.preventDefault();
+    const t = event.changedTouches[0];
+    if (t) begin("touch", t.clientX, t.clientY);
+  }, { passive: false });
+  button.addEventListener("touchmove", (event) => {
+    const t = event.changedTouches[0];
+    if (t) move(t.clientX, t.clientY);
+  }, { passive: true });
+  button.addEventListener("touchend", (event) => {
+    const t = event.changedTouches[0];
+    if (t) end("touch", t.clientX, t.clientY);
+    else cancel("touch");
   });
+  button.addEventListener("touchcancel", () => cancel("touch"));
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    begin("pointer", event.clientX, event.clientY);
+  });
+  button.addEventListener("pointermove", (event) => move(event.clientX, event.clientY));
+  button.addEventListener("pointerup", (event) => {
+    if (event.button === 0) end("pointer", event.clientX, event.clientY);
+    else cancel("pointer");
+  });
+  button.addEventListener("pointercancel", () => cancel("pointer"));
 }
 
 /** 系统 IME 正在组合时，浏览器把这次 keydown 标成 keyCode 229。这是平台事实，不是按键身份。 */
@@ -288,6 +342,12 @@ class RimeWorkerClient {
   call<T>(name: string, ...args: unknown[]): Promise<T> {
     if (this.fatal) return Promise.reject(this.fatal);
     const run = () => new Promise<T>((resolve, reject) => {
+      // 排在队里的调用轮到时引擎可能已经停了：直接失败。否则会发给已终止的 Worker、永远等不到回复，
+      // 挂着的回调会把整个旧插件（连同几十 MB 的词库数据）留在内存里（1.0.3 iPad 补测发现）。
+      if (this.fatal) {
+        reject(this.fatal);
+        return;
+      }
       this.pending = {
         resolve: (value) => resolve(value as T),
         reject
@@ -338,10 +398,35 @@ const KEY_MAP: Record<string, string> = {
   ":": "colon",
   "'": "apostrophe",
   "/": "slash",
-  "\\": "backslash"
+  "\\": "backslash",
+  // 1.0.4 起中文模式接管全部标点键，出什么由方案决定（见 assets.ts 的 PUNCT_COMMITS，对齐微信输入法）。
+  "`": "grave",
+  "~": "asciitilde",
+  "@": "at",
+  "#": "numbersign",
+  "$": "dollar",
+  "%": "percent",
+  "^": "asciicircum",
+  "&": "ampersand",
+  "*": "asterisk",
+  "(": "parenleft",
+  ")": "parenright",
+  "-": "minus",
+  "_": "underscore",
+  "=": "equal",
+  "+": "plus",
+  "[": "bracketleft",
+  "]": "bracketright",
+  "{": "braceleft",
+  "}": "braceright",
+  "|": "bar",
+  "\"": "quotedbl",
+  "<": "less",
+  ">": "greater"
 };
 
-const START_PUNCTUATION = new Set([",", ".", "?", "!", ";", ":", "/", "\\"]);
+/* 中文模式下由就打个字接管的标点键：键盘上全部 32 个 ASCII 标点。要打英文符号，先按 Shift 切到英文模式。 */
+const START_PUNCTUATION = new Set([..."`~!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?"]);
 
 /* 方案里 / 和 \ 都是以「、」打头的标点菜单（后面还有 ／ ÷ 之类）。中文输入法的习惯是
    按下直接出顿号，所以菜单首项是「、」时立即确认，不让用户再按一次空格。 */
@@ -808,7 +893,7 @@ export default class JustTypePlugin extends Plugin {
 
   private async ensureManifest(): Promise<void> {
     const dir = this.manifest.dir;
-    const installed = this.manifest.version;
+    const installed: unknown = this.manifest.version;
     if (!dir) {
       this.manifestCheck = `跳过（不知道插件文件夹）`;
       return;
@@ -817,21 +902,23 @@ export default class JustTypePlugin extends Plugin {
       this.manifestCheck = `一致（${PLUGIN_VERSION}）`;
       return;
     }
+    // 清单里的版本号缺失或不像版本号（文件本身下坏了）：悄悄改好，不当成「更新没下载完整」。
+    const valid = typeof installed === "string" && /^\d+(\.\d+)*$/.test(installed);
+    const label = valid ? installed : "（版本号无效）";
+    const incomplete = valid && compareVersions(installed, PLUGIN_VERSION) > 0;
+    // Obsidian 查更新时比的是内存里这份清单（和插件拿到的是同一个对象）。先改内存：
+    // 就算下面写文件失败，这次打开期间「更新」按钮也会出现，用户照样能再更新一次。
+    this.manifest.version = PLUGIN_VERSION;
+    const head = `清单 ${label}、程序 ${PLUGIN_VERSION}${incomplete ? "（更新没下载完整）" : ""}`;
     try {
       await this.app.vault.adapter.write(normalizePath(`${dir}/manifest.json`), `${JSON.stringify(BUNDLED_MANIFEST, null, 2)}\n`);
-      // Obsidian 查更新时比的是内存里这份清单，和插件拿到的是同一个对象。
-      this.manifest.version = PLUGIN_VERSION;
-      const incomplete = compareVersions(installed, PLUGIN_VERSION) > 0;
-      this.manifestCheck = incomplete
-        ? `清单 ${installed}、程序 ${PLUGIN_VERSION}（更新没下载完整），已改回 ${PLUGIN_VERSION}`
-        : `清单 ${installed}、程序 ${PLUGIN_VERSION}，已改成 ${PLUGIN_VERSION}`;
-      this.log(`安装完整性：${this.manifestCheck}`);
-      if (incomplete && !this.disabledHere) {
-        new Notice(`Just Type 这次更新没下载完整，已恢复到 ${PLUGIN_VERSION}。请到 设置 → 第三方插件 里再更新一次。`, 12000);
-      }
+      this.manifestCheck = `${head}，已${incomplete ? "改回" : "改成"} ${PLUGIN_VERSION}`;
     } catch (error) {
-      this.manifestCheck = `清单 ${installed}、程序 ${PLUGIN_VERSION}，改回失败：${this.errorMessage(error)}`;
-      this.log(`安装完整性：${this.manifestCheck}`);
+      this.manifestCheck = `${head}，文件没改成（${this.errorMessage(error)}），这次打开期间已按 ${PLUGIN_VERSION} 处理，下次启动再试`;
+    }
+    this.log(`安装完整性：${this.manifestCheck}`);
+    if (incomplete && !this.disabledHere) {
+      new Notice(`Just Type 这次更新没下载完整，已恢复到 ${PLUGIN_VERSION}。请到 设置 → 第三方插件 里再更新一次。`, 12000);
     }
   }
 
@@ -868,8 +955,12 @@ export default class JustTypePlugin extends Plugin {
           : "Just Type 安装时样式文件没下载完整，已自动补好，重新打开 Obsidian 后生效。", 8000);
       }
     } catch (error) {
+      // 每次启动都会再检查一遍，所以先请用户等下次打开；还不行再重装。
       this.styleCheck = `补写失败：${this.errorMessage(error)}`;
       this.log(`样式文件自检失败：${this.errorMessage(error)}`);
+      if (!this.disabledHere) {
+        new Notice("Just Type 的样式文件没下载完整，自动修复也没成功，候选栏可能显示在屏幕左下角。下次打开 Obsidian 会再试一次；如果还是这样，请到 设置 → 第三方插件 里卸载 Just Type IME 后重新安装。", 15000);
+      }
     }
   }
 
@@ -981,14 +1072,22 @@ export default class JustTypePlugin extends Plugin {
   }
 
   onunload(): void {
-    this.setInlinePreedit(undefined, "");
-    if (this.switchTimer !== undefined) window.clearTimeout(this.switchTimer);
-    if (this.dictFrame !== undefined) window.cancelAnimationFrame(this.dictFrame);
-    this.dict?.dispose();
-    this.dictStore?.close();
-    this.dictChip?.remove();
-    this.client?.destroy();
+    // 停掉引擎和词库任务，并把大块数据的引用都放掉：就算 Obsidian 或系统还留着这个旧实例的某个回调，
+    // 留下的也只是一个空壳，不会带着引擎和几十 MB 的词库数据。
+    this.stopInput();
+    this.candidates?.empty();
     this.panel?.remove();
+    this.panel = undefined;
+    this.preedit = undefined;
+    this.candidates = undefined;
+    this.inlineTarget = undefined;
+    this.activeSink = undefined;
+    this.emojiHits = [];
+    this.updates = undefined;
+    this.ribbon = undefined;
+    this.status = undefined;
+    this.dictListeners.clear();
+    this.deviceListeners.clear();
   }
 
   /* ---------------- 引擎与词库 ---------------- */
@@ -1871,11 +1970,15 @@ export default class JustTypePlugin extends Plugin {
 
   private createControls(): void {
     // Obsidian mobile has no status bar, so the ribbon carries the state there.
-    this.ribbon = this.addRibbonIcon("languages", "Just Type：切换中英文", () => this.toggle());
+    // 回调经过一个可清空的中转：Obsidian 卸载插件后，若还有地方留着这个回调，也不会把整个旧插件（连同引擎、词库）
+    // 留在内存里（1.0.4 候选版 iPad 复测：反复卸载／加载后旧实例经这类回调存活，内存一组比一组高）。
+    const ref: { plugin?: JustTypePlugin } = { plugin: this };
+    this.register(() => { ref.plugin = undefined; });
+    this.ribbon = this.addRibbonIcon("languages", "Just Type：切换中英文", () => ref.plugin?.toggle());
     if (!Platform.isMobile) {
       this.status = this.addStatusBarItem();
       this.status.addClass("just-type-status");
-      this.status.addEventListener("click", () => this.toggle());
+      this.registerDomEvent(this.status, "click", () => ref.plugin?.toggle());
     }
   }
 
@@ -1931,14 +2034,14 @@ export default class JustTypePlugin extends Plugin {
     this.preedit = this.panel.createDiv({ cls: "just-type-preedit" });
     this.candidates = this.panel.createDiv({ cls: "just-type-candidates" });
     // 捕获阶段记录，早于 iPadOS 让编辑器失焦。标题失焦后光标位置会丢，这里先存一份。
-    this.panel.addEventListener("pointerdown", () => {
+    this.registerDomEvent(this.panel, "pointerdown", () => {
       this.panelPressAt = performance.now();
       const sink = this.activeSink;
       if (sink?.kind === "title") {
         const selection = window.getSelection();
         if (selection?.rangeCount && sink.el.contains(selection.anchorNode)) sink.range = selection.getRangeAt(0).cloneRange();
       }
-    }, true);
+    }, { capture: true });
   }
 
   /* ---------------- input ---------------- */
